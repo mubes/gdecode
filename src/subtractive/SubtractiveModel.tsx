@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore, activeDoc } from '../store.ts';
 import { computeDefaultStock } from './Stock.ts';
@@ -133,6 +134,164 @@ function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
   return geom;
 }
 
+// --- stock editor (draggable bounds) ----------------------------------------
+
+/** The six faces of the stock box, each draggable along one axis. */
+const FACES: { axis: 0 | 1 | 2; side: 'min' | 'max'; color: string }[] = [
+  { axis: 0, side: 'min', color: '#ff6b6b' },
+  { axis: 0, side: 'max', color: '#ff6b6b' },
+  { axis: 1, side: 'min', color: '#39d98a' },
+  { axis: 1, side: 'max', color: '#39d98a' },
+  { axis: 2, side: 'min', color: '#4fa3ff' },
+  { axis: 2, side: 'max', color: '#4fa3ff' },
+];
+
+const AXIS_DIR = [
+  new THREE.Vector3(1, 0, 0),
+  new THREE.Vector3(0, 1, 0),
+  new THREE.Vector3(0, 0, 1),
+];
+
+/** Minimum stock extent (mm) along any axis — handles can't cross past this. */
+const MIN_EXTENT = 0.5;
+
+/** World min/max corners of a stock box. */
+function stockBounds(s: StockDef): { min: THREE.Vector3; max: THREE.Vector3 } {
+  return {
+    min: new THREE.Vector3(s.origin[0], s.origin[1], s.origin[2]),
+    max: new THREE.Vector3(s.origin[0] + s.sizeX, s.origin[1] + s.sizeY, s.origin[2] + s.sizeZ),
+  };
+}
+
+/** Apply a dragged face coordinate to the stock, keeping a minimum extent. */
+function resizeStock(s: StockDef, axis: 0 | 1 | 2, side: 'min' | 'max', coord: number): StockDef {
+  const origin: [number, number, number] = [...s.origin];
+  const size = [s.sizeX, s.sizeY, s.sizeZ];
+  const lo = origin[axis];
+  const hi = origin[axis] + size[axis];
+  if (side === 'min') {
+    const newLo = Math.min(coord, hi - MIN_EXTENT);
+    origin[axis] = newLo;
+    size[axis] = hi - newLo;
+  } else {
+    const newHi = Math.max(coord, lo + MIN_EXTENT);
+    size[axis] = newHi - lo;
+  }
+  return { origin, sizeX: size[0], sizeY: size[1], sizeZ: size[2] };
+}
+
+/**
+ * Renders the stock as a wireframe box with a draggable handle on each of its
+ * six faces. Dragging a handle slides that face along its axis (updating the
+ * store's stock live); orbit controls pause while dragging. On release the
+ * leva stock sliders are nudged to re-seed (bumpStockEdit) so panel + viewport
+ * stay consistent.
+ */
+function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
+  const { camera, gl, raycaster, controls } = useThree();
+  const setStock = useStore((s) => s.setStock);
+  const bumpStockEdit = useStore((s) => s.bumpStockEdit);
+
+  const drag = useRef<{ axis: 0 | 1 | 2; side: 'min' | 'max' } | null>(null);
+
+  const { min, max } = useMemo(() => stockBounds(stock), [stock]);
+  const center = useMemo(
+    () => new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5),
+    [min, max],
+  );
+  const size = useMemo(() => new THREE.Vector3().subVectors(max, min), [min, max]);
+
+  // The box3 helper draws the wireframe outline.
+  const box3 = useMemo(() => new THREE.Box3(min.clone(), max.clone()), [min, max]);
+
+  // Handle size scales with the stock so it stays grabbable but unobtrusive.
+  const handleSize = useMemo(() => {
+    const maxDim = Math.max(size.x, size.y, size.z, 1);
+    return Math.min(Math.max(maxDim * 0.05, 1), 8);
+  }, [size]);
+
+  // World-space center of a given face (drag handle position).
+  const faceCenter = (axis: 0 | 1 | 2, side: 'min' | 'max'): THREE.Vector3 => {
+    const p = center.clone();
+    p.setComponent(axis, side === 'min' ? min.getComponent(axis) : max.getComponent(axis));
+    return p;
+  };
+
+  // Window-level drag: project the pointer onto a plane containing the drag
+  // axis and facing the camera, then read the axis coordinate.
+  useEffect(() => {
+    const dom = gl.domElement;
+    const ndc = new THREE.Vector2();
+    const hit = new THREE.Vector3();
+    const plane = new THREE.Plane();
+    const n = new THREE.Vector3();
+
+    const onMove = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      const s = useStore.getState().stock;
+      if (!s) return;
+
+      const r = dom.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      raycaster.setFromCamera(ndc, camera);
+
+      // Plane normal = view direction projected perpendicular to the drag axis,
+      // so the plane contains the axis and most faces the camera.
+      const a = AXIS_DIR[d.axis];
+      const v = raycaster.ray.direction;
+      n.copy(v).addScaledVector(a, -a.dot(v));
+      if (n.lengthSq() < 1e-6) return;
+      n.normalize();
+
+      // A point on the current face (cross-axis components are stable).
+      const b = stockBounds(s);
+      const onAxis = (b.min.getComponent(d.axis) + b.max.getComponent(d.axis)) * 0.5;
+      const pt = new THREE.Vector3().addVectors(b.min, b.max).multiplyScalar(0.5);
+      pt.setComponent(d.axis, onAxis);
+      plane.setFromNormalAndCoplanarPoint(n, pt);
+
+      if (!raycaster.ray.intersectPlane(plane, hit)) return;
+      setStock(resizeStock(s, d.axis, d.side, hit.getComponent(d.axis)));
+    };
+
+    const onUp = () => {
+      if (!drag.current) return;
+      drag.current = null;
+      if (controls) (controls as { enabled?: boolean }).enabled = true;
+      bumpStockEdit(); // re-seed the leva sliders once, after the drag
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [camera, gl, raycaster, controls, setStock, bumpStockEdit]);
+
+  const onGrab = (axis: 0 | 1 | 2, side: 'min' | 'max') => (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    drag.current = { axis, side };
+    if (controls) (controls as { enabled?: boolean }).enabled = false;
+  };
+
+  return (
+    <group>
+      <box3Helper args={[box3, new THREE.Color(color)]} />
+      {FACES.map(({ axis, side, color: hc }) => {
+        const p = faceCenter(axis, side);
+        return (
+          <mesh key={`${axis}-${side}`} position={p} onPointerDown={onGrab(axis, side)}>
+            <boxGeometry args={[handleSize, handleSize, handleSize]} />
+            <meshStandardMaterial color={hc} transparent opacity={0.85} depthTest={false} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
 // --- component ---------------------------------------------------------------
 
 export function SubtractiveModel() {
@@ -142,6 +301,7 @@ export function SubtractiveModel() {
   const tool = useStore((s) => s.tool);
   const opIndex = useStore((s) => s.opIndex);
   const effectiveMode = useStore((s) => s.effectiveMode);
+  const stockColor = useStore((s) => s.stockColor);
   const setStock = useStore((s) => s.setStock);
   const setProgress = useStore((s) => s.setProgress);
   const setStatus = useStore((s) => s.setStatus);
@@ -164,16 +324,20 @@ export function SubtractiveModel() {
 
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
   const geomRef = useRef<THREE.BufferGeometry | null>(null);
+  // Signature of the carve that produced the current geometry. Lets us skip a
+  // redundant re-carve when re-entering subtractive mode unchanged, so the
+  // workpiece is preserved (not recomputed) across mode switches.
+  const carvedSig = useRef<string | null>(null);
+  const carvedDoc = useRef<typeof doc>(null);
 
-  // Carve whenever inputs change.
+  // Carve whenever the carve INPUTS change. Leaving subtractive mode does NOT
+  // dispose the geometry — it is kept so switching back shows it instantly.
   useEffect(() => {
-    if (!active || !doc || !stock) {
-      // Clear any existing geometry when leaving subtractive mode.
-      if (geomRef.current) {
-        geomRef.current.dispose();
-        geomRef.current = null;
-        setGeometry(null);
-      }
+    if (!active || !doc || !stock) return; // keep any existing workpiece
+
+    // Already carved with these exact inputs? Reuse the cached geometry.
+    const sig = JSON.stringify({ stock, tool, gridRes, opIndex });
+    if (carvedDoc.current === doc && carvedSig.current === sig && geomRef.current) {
       return;
     }
 
@@ -198,6 +362,8 @@ export function SubtractiveModel() {
         // Dispose the previous geometry before swapping in the new one.
         if (geomRef.current) geomRef.current.dispose();
         geomRef.current = geom;
+        carvedDoc.current = doc;
+        carvedSig.current = sig;
         setGeometry(geom);
         setProgress(1);
         setStatus('ready');
@@ -225,16 +391,22 @@ export function SubtractiveModel() {
     };
   }, []);
 
-  if (!active || !geometry) return null;
+  // Hidden (but geometry retained) when not in subtractive mode.
+  if (!active) return null;
 
   return (
-    <mesh geometry={geometry} castShadow receiveShadow>
-      <meshStandardMaterial
-        color="#b8b8c0"
-        metalness={0.35}
-        roughness={0.55}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
+    <>
+      {geometry && (
+        <mesh geometry={geometry} castShadow receiveShadow>
+          <meshStandardMaterial
+            color={stockColor}
+            metalness={0.35}
+            roughness={0.55}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      )}
+      {stock && <StockEditor stock={stock} color={stockColor} />}
+    </>
   );
 }

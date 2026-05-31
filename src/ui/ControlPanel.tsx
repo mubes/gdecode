@@ -40,6 +40,8 @@ export function ControlPanel() {
   const gridRes = useStore((s) => s.gridRes);
   const tool = useStore((s) => s.tool);
   const stock = useStore((s) => s.stock);
+  const stockColor = useStore((s) => s.stockColor);
+  const stockEditNonce = useStore((s) => s.stockEditNonce);
   const showGrid = useStore((s) => s.showGrid);
   const showAxes = useStore((s) => s.showAxes);
   const showStats = useStore((s) => s.showStats);
@@ -53,12 +55,17 @@ export function ControlPanel() {
   const curStock = stock ?? DEFAULT_STOCK;
   const modelScale = activeModel?.scale ?? 1;
 
-  // Stock slider bounds from the toolpath bbox (± margin).
-  const pad = 50;
-  const bnd = (axis: 0 | 1 | 2): [number, number] =>
-    doc
-      ? [Math.floor(doc.bbox.min[axis]) - pad, Math.ceil(doc.bbox.max[axis]) + pad]
-      : [-100, 100];
+  // Stock slider bounds: the toolpath bbox expanded by a generous per-axis
+  // margin (≥ the axis extent, min 100mm) so the stock can be grown well
+  // beyond the cut envelope. Dragging the stock faces in the 3D view sets the
+  // same values; these wider ranges keep that room available on the sliders.
+  const bnd = (axis: 0 | 1 | 2): [number, number] => {
+    if (!doc) return [-200, 200];
+    const lo = doc.bbox.min[axis];
+    const hi = doc.bbox.max[axis];
+    const pad = Math.max(100, hi - lo);
+    return [Math.floor(lo - pad), Math.ceil(hi + pad)];
+  };
 
   const isAdditive = effectiveMode === 'additive';
   const isSubtractive = effectiveMode === 'subtractive';
@@ -234,6 +241,14 @@ export function ControlPanel() {
               setStockAxis(2, Math.min(v[0], v[1]), Math.max(v[0], v[1]));
             },
           },
+          stockColor: {
+            label: 'stock color',
+            value: stockColor,
+            onChange: (v: string, _p, { initial }) => {
+              if (initial) return;
+              useStore.getState().setStockColor(v);
+            },
+          },
         });
       }
 
@@ -285,8 +300,9 @@ export function ControlPanel() {
     },
     // Structural deps only (live-edited values excluded to avoid mid-drag
     // rebuilds). selectedId rebuilds so per-model controls (scale) + stock
-    // bounds re-seed when the active model changes.
-    [isAdditive, isSubtractive, detectedMode, modeOverride, moveCount, selectedId],
+    // bounds re-seed when the active model changes; stockEditNonce re-seeds the
+    // stock sliders once after a face is dragged in the 3D view.
+    [isAdditive, isSubtractive, detectedMode, modeOverride, moveCount, selectedId, stockEditNonce],
   );
 
   return <Leva collapsed={false} />;

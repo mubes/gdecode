@@ -53,6 +53,11 @@ export interface AppState {
   gridRes: number;
   tool: ToolDef;
   opIndex: number;
+  /** Colour of the carved stock/workpiece material. */
+  stockColor: string;
+  /** Bumped when stock is edited by dragging in the 3D view, so the leva
+   *  stock sliders re-seed once (on drag end) without rebuilding mid-drag. */
+  stockEditNonce: number;
 
   // --- scene/view ---
   showGrid: boolean;
@@ -89,6 +94,8 @@ export interface AppState {
   setGridRes: (n: number) => void;
   setTool: (t: ToolDef) => void;
   setOpIndex: (n: number) => void;
+  setStockColor: (c: string) => void;
+  bumpStockEdit: () => void;
   setShowGrid: (v: boolean) => void;
   setShowAxes: (v: boolean) => void;
   setShowStats: (v: boolean) => void;
@@ -146,6 +153,8 @@ export const useStore = create<AppState>((set, get) => ({
   gridRes: 1024,
   tool: DEFAULT_TOOL,
   opIndex: -1,
+  stockColor: '#b8b8c0',
+  stockEditNonce: 0,
 
   showGrid: true,
   showAxes: true,
@@ -225,6 +234,8 @@ export const useStore = create<AppState>((set, get) => ({
   setGridRes: (gridRes) => set({ gridRes }),
   setTool: (tool) => set({ tool }),
   setOpIndex: (opIndex) => set({ opIndex }),
+  setStockColor: (stockColor) => set({ stockColor }),
+  bumpStockEdit: () => set((s) => ({ stockEditNonce: s.stockEditNonce + 1 })),
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowAxes: (showAxes) => set({ showAxes }),
   setShowStats: (showStats) => set({ showStats }),
