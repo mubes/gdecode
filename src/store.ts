@@ -24,6 +24,9 @@ export interface ModelEntry {
   position: [number, number, number];
   /** Uniform scale factor (1 = original size). */
   scale: number;
+  /** Subtractive operation scrubber position for THIS file (-1 = all moves).
+   *  Recorded per model so switching files preserves each one's step. */
+  opIndex: number;
 }
 
 export interface AppState {
@@ -45,14 +48,14 @@ export interface AppState {
   colorBy: AdditiveColorBy;
   renderTubes: boolean;
   extrusionWidth: number;
-  /** Filament color for the realistic "as printed" view. */
-  filamentColor: string;
+  /** Filament colors for the realistic "as printed" view, one per tool
+   *  (T0..T3 → index 0..3). Beads are colored by their move's tool. */
+  filamentColors: [string, string, string, string];
 
   // --- subtractive view ---
   stock: StockDef | null;
   gridRes: number;
   tool: ToolDef;
-  opIndex: number;
   /** Colour of the carved stock/workpiece material. */
   stockColor: string;
   /** True once the user has changed the stock manually (3D face drag).
@@ -94,12 +97,14 @@ export interface AppState {
   setColorBy: (c: AdditiveColorBy) => void;
   setRenderTubes: (v: boolean) => void;
   setExtrusionWidth: (v: number) => void;
-  setFilamentColor: (c: string) => void;
+  /** Set the filament color for one tool slot (0..3). */
+  setFilamentColor: (index: number, c: string) => void;
   setStock: (s: StockDef | null) => void;
   /** Set stock as a deliberate USER edit (marks stockUserEdited). */
   editStock: (s: StockDef) => void;
   setGridRes: (n: number) => void;
   setTool: (t: ToolDef) => void;
+  /** Set the operation scrubber for the active (selected) model. */
   setOpIndex: (n: number) => void;
   setStockColor: (c: string) => void;
   setStockDragging: (v: boolean) => void;
@@ -114,6 +119,8 @@ export interface AppState {
 
   // --- derived ---
   activeModel: () => ModelEntry | null;
+  /** The active (selected) model's operation scrubber position (-1 if none). */
+  activeOpIndex: () => number;
   effectiveMode: () => Mode | null;
   /** Max additive layer index across all loaded models. */
   maxLayer: () => number;
@@ -155,12 +162,11 @@ export const useStore = create<AppState>((set, get) => ({
   colorBy: 'realistic',
   renderTubes: true,
   extrusionWidth: 1.5,
-  filamentColor: '#d9882f',
+  filamentColors: ['#d9882f', '#4fa3ff', '#39d98a', '#ff6b6b'],
 
   stock: null,
   gridRes: 1024,
   tool: DEFAULT_TOOL,
-  opIndex: -1,
   stockColor: '#b8b8c0',
   stockUserEdited: false,
   stockDragging: false,
@@ -188,6 +194,7 @@ export const useStore = create<AppState>((set, get) => ({
         doc,
         position: [offsetX, 0, 0],
         scale: 1,
+        opIndex: -1,
       };
       const models = [...s.models, model];
       const maxLayer = computeMaxLayer(models);
@@ -198,7 +205,6 @@ export const useStore = create<AppState>((set, get) => ({
         error: null,
         progress: 1,
         layerRange: [0, maxLayer],
-        opIndex: -1,
         modeOverride: null,
         // Auto-fit the stock to the new file's extremities unless the user has
         // dialled in their own block (then keep it).
@@ -241,12 +247,23 @@ export const useStore = create<AppState>((set, get) => ({
   setColorBy: (colorBy) => set({ colorBy }),
   setRenderTubes: (renderTubes) => set({ renderTubes }),
   setExtrusionWidth: (extrusionWidth) => set({ extrusionWidth }),
-  setFilamentColor: (filamentColor) => set({ filamentColor }),
+  setFilamentColor: (index, c) =>
+    set((s) => {
+      const filamentColors = [...s.filamentColors] as [string, string, string, string];
+      if (index >= 0 && index < filamentColors.length) filamentColors[index] = c;
+      return { filamentColors };
+    }),
   setStock: (stock) => set({ stock }),
   editStock: (stock) => set({ stock, stockUserEdited: true }),
   setGridRes: (gridRes) => set({ gridRes }),
   setTool: (tool) => set({ tool }),
-  setOpIndex: (opIndex) => set({ opIndex }),
+  // Operation scrubber is per-model: write it onto the active model.
+  setOpIndex: (opIndex) =>
+    set((s) => {
+      const id = s.selectedId ?? s.models[0]?.id ?? null;
+      if (!id) return {};
+      return { models: s.models.map((m) => (m.id === id ? { ...m, opIndex } : m)) };
+    }),
   setStockColor: (stockColor) => set({ stockColor }),
   setStockDragging: (stockDragging) => set({ stockDragging }),
   setShowStockEditor: (showStockEditor) => set({ showStockEditor }),
@@ -266,12 +283,13 @@ export const useStore = create<AppState>((set, get) => ({
       progress: 0,
       modeOverride: null,
       layerRange: [0, 0],
-      opIndex: -1,
       stock: null,
       stockUserEdited: false,
     }),
 
   activeModel: () => pickActive(get().models, get().selectedId),
+
+  activeOpIndex: () => pickActive(get().models, get().selectedId)?.opIndex ?? -1,
 
   effectiveMode: () => {
     const { modeOverride } = get();

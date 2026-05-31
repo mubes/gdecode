@@ -11,7 +11,7 @@ import type { Mode, ToolKind } from '../types';
 // Clearer color-by labels (the raw enum was opaque). A legend (ColorLegend.tsx)
 // explains what the active scheme maps onto.
 const COLOR_BY_OPTIONS: Record<string, AdditiveColorBy> = {
-  'as printed (realistic)': 'realistic',
+  'as printed': 'realistic',
   'layer (height)': 'layer',
   'feed rate': 'feedrate',
   tool: 'tool',
@@ -27,14 +27,10 @@ const MODE_OPTIONS: Record<string, Mode | null> = {
 
 export function ControlPanel() {
   const doc = useStore(activeDoc);
-  const selectedId = useStore((s) => s.selectedId);
-  const activeModel = useStore((s) => s.activeModel());
   const modeOverride = useStore((s) => s.modeOverride);
   const colorBy = useStore((s) => s.colorBy);
   const renderTubes = useStore((s) => s.renderTubes);
   const extrusionWidth = useStore((s) => s.extrusionWidth);
-  const filamentColor = useStore((s) => s.filamentColor);
-  const opIndex = useStore((s) => s.opIndex);
   const gridRes = useStore((s) => s.gridRes);
   const tool = useStore((s) => s.tool);
   const stockColor = useStore((s) => s.stockColor);
@@ -47,9 +43,6 @@ export function ControlPanel() {
 
   const effectiveMode = useStore((s) => s.effectiveMode)();
   const detectedMode: Mode | null = doc?.mode ?? null;
-
-  const moveCount = doc?.moves.length ?? 0;
-  const modelScale = activeModel?.scale ?? 1;
 
   const isAdditive = effectiveMode === 'additive';
   const isSubtractive = effectiveMode === 'subtractive';
@@ -73,18 +66,6 @@ export function ControlPanel() {
       if (isAdditive) {
         // Z layer-range is the dedicated vertical LayerSlider on the left.
         schema.Additive = makeFolder({
-          scale: {
-            label: 'scale (selected)',
-            value: modelScale,
-            min: 0.1,
-            max: 5,
-            step: 0.05,
-            onChange: (v: number, _p, { initial }) => {
-              if (initial) return;
-              const id = useStore.getState().selectedId;
-              if (id) useStore.getState().setModelScale(id, v);
-            },
-          },
           nozzleWidth: {
             label: 'nozzle width (mm)',
             value: extrusionWidth,
@@ -113,28 +94,14 @@ export function ControlPanel() {
               useStore.getState().setColorBy(v);
             },
           },
-          filament: {
-            label: 'filament color',
-            value: filamentColor,
-            onChange: (v: string, _p, { initial }) => {
-              if (initial) return;
-              useStore.getState().setFilamentColor(v);
-            },
-          },
+          // Filament colours (per tool) are edited via the swatches in the
+          // bottom-centre legend (ui/ColorLegend) — native colour wells with no
+          // hex readout, which leva's colour control can't suppress.
         });
       } else if (isSubtractive) {
         schema.Subtractive = makeFolder({
-          operation: {
-            label: 'operation',
-            value: clampNum(opIndex, -1, moveCount),
-            min: -1,
-            max: moveCount,
-            step: 1,
-            onChange: (v: number, _p, { initial }) => {
-              if (initial) return;
-              useStore.getState().setOpIndex(v);
-            },
-          },
+          // The operation scrubber is a custom debounced slider (ui/OpScrubber),
+          // not a leva control — leva's number input can't show "all" for -1.
           gridRes: {
             label: 'grid res',
             options: GRID_RES_OPTIONS,
@@ -243,15 +210,15 @@ export function ControlPanel() {
       return schema;
     },
     // Structural deps only (live-edited values excluded to avoid mid-drag
-    // rebuilds). selectedId rebuilds so per-model controls (scale) re-seed when
-    // the active model changes.
-    [isAdditive, isSubtractive, detectedMode, modeOverride, moveCount, selectedId],
+    // rebuilds): the schema shape only depends on the active mode.
+    [isAdditive, isSubtractive, detectedMode, modeOverride],
   );
 
   // Wider panel + a roomier label column so toggle labels aren't truncated.
   return (
     <Leva
       collapsed={false}
+      titleBar={{ filter: false }}
       theme={{ sizes: { rootWidth: '340px', controlWidth: '150px' } }}
     />
   );
@@ -266,10 +233,6 @@ function makeFolder(
   settings?: Parameters<typeof folder>[1],
 ): FolderSchema[string] {
   return folder(schema, settings) as FolderSchema[string];
-}
-
-function clampNum(n: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, n));
 }
 
 export default ControlPanel;

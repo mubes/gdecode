@@ -63,24 +63,18 @@ function sampleArc(m: Move, cellSize: number): Array<[number, number, number]> {
   return pts;
 }
 
-/**
- * Carve a height field from the given moves.
- *
- * @param moves    normalized IR moves.
- * @param stock    stock block (origin = min corner incl. bottom Z).
- * @param tool     active tool definition.
- * @param gridRes  target grid resolution along the LONGER XY axis (cells).
- * @param opIndex  scrub: carve only moves [0..opIndex]; -1 = all moves.
- * @param onProgress optional 0..1 progress callback.
- */
-export function carveHeightField(
-  moves: Move[],
-  stock: StockDef,
-  tool: ToolDef,
-  gridRes: number,
-  opIndex: number,
-  onProgress?: CarveProgress,
-): HeightFieldPayload {
+/** A reusable carve in progress: the grid + a function to apply one move, and a
+ *  finalizer that snapshots the height field. Lets the worker drive the carve
+ *  in chunks (yielding for progress) while keeping the pure path identical. */
+export interface CarveSession {
+  /** Stamp a single move into the height field (no-op for non-cutting moves). */
+  carveMove: (m: Move) => void;
+  /** Snapshot the current height field as a payload. */
+  finalize: () => HeightFieldPayload;
+}
+
+/** Set up the grid + cutting closures for a carve (no moves applied yet). */
+export function setupCarve(stock: StockDef, tool: ToolDef, gridRes: number): CarveSession {
   const [ox, oy, oz] = stock.origin;
   const sizeX = stock.sizeX;
   const sizeY = stock.sizeY;
@@ -103,10 +97,6 @@ export function carveHeightField(
 
   const profile = toolProfile(tool);
   const R = profile.radius;
-
-  // Determine the inclusive last move index to carve.
-  const lastIdx =
-    opIndex < 0 ? moves.length - 1 : Math.min(opIndex, moves.length - 1);
 
   // Stamp the tool's circular footprint centered at world (px,py) cutting to
   // tip Z = tipZ. Lowers H to surfaceZ = tipZ + bottomOffset(r) inside radius.
@@ -151,12 +141,8 @@ export function carveHeightField(
   // Walk a straight segment, stamping at sub-cell intervals so the swept
   // footprint is gap-free (overlapping disks along the path).
   const sweepSegment = (
-    sx: number,
-    sy: number,
-    sz: number,
-    ex: number,
-    ey: number,
-    ez: number,
+    sx: number, sy: number, sz: number,
+    ex: number, ey: number, ez: number,
   ) => {
     const segLen = Math.hypot(ex - sx, ey - sy);
     // Step <= ~half a cell so disks overlap; at least the endpoints.
@@ -168,38 +154,26 @@ export function carveHeightField(
     }
   };
 
-  const total = lastIdx + 1;
-  // Throttle progress reporting to ~100 updates.
-  const reportEvery = Math.max(1, Math.floor(total / 100));
-
-  for (let i = 0; i <= lastIdx; i++) {
-    const m = moves[i];
+  const carveMove = (m: Move) => {
     // Only cutting moves with the spindle on remove material.
     const isCut = m.type === 'cut' || m.type === 'arcCW' || m.type === 'arcCCW';
     const spindleOn = m.spindle === undefined || m.spindle > 0;
-    if (isCut && spindleOn) {
-      if (m.type === 'cut') {
-        const [sx, sy, sz] = m.start;
-        const [ex, ey, ez] = m.end;
-        sweepSegment(sx, sy, sz, ex, ey, ez);
-      } else {
-        const pts = sampleArc(m, Math.min(dx, dy));
-        for (let p = 1; p < pts.length; p++) {
-          const a = pts[p - 1];
-          const b = pts[p];
-          sweepSegment(a[0], a[1], a[2], b[0], b[1], b[2]);
-        }
+    if (!(isCut && spindleOn)) return;
+    if (m.type === 'cut') {
+      const [sx, sy, sz] = m.start;
+      const [ex, ey, ez] = m.end;
+      sweepSegment(sx, sy, sz, ex, ey, ez);
+    } else {
+      const pts = sampleArc(m, Math.min(dx, dy));
+      for (let p = 1; p < pts.length; p++) {
+        const a = pts[p - 1];
+        const b = pts[p];
+        sweepSegment(a[0], a[1], a[2], b[0], b[1], b[2]);
       }
     }
+  };
 
-    if (onProgress && (i % reportEvery === 0 || i === lastIdx)) {
-      onProgress(total > 0 ? (i + 1) / total : 1);
-    }
-  }
-
-  if (onProgress) onProgress(1);
-
-  return {
+  const finalize = (): HeightFieldPayload => ({
     heights,
     nx,
     ny,
@@ -208,5 +182,47 @@ export function carveHeightField(
     sizeY,
     stockTopZ,
     stockBottomZ,
-  };
+  });
+
+  return { carveMove, finalize };
+}
+
+/** Inclusive index of the last move to carve (-1 opIndex ⇒ all moves). */
+export function lastCarveIndex(moves: Move[], opIndex: number): number {
+  return opIndex < 0 ? moves.length - 1 : Math.min(opIndex, moves.length - 1);
+}
+
+/**
+ * Carve a height field from the given moves. Pure and synchronous.
+ *
+ * @param moves    normalized IR moves.
+ * @param stock    stock block (origin = min corner incl. bottom Z).
+ * @param tool     active tool definition.
+ * @param gridRes  target grid resolution along the LONGER XY axis (cells).
+ * @param opIndex  scrub: carve only moves [0..opIndex]; -1 = all moves.
+ * @param onProgress optional 0..1 progress callback.
+ */
+export function carveHeightField(
+  moves: Move[],
+  stock: StockDef,
+  tool: ToolDef,
+  gridRes: number,
+  opIndex: number,
+  onProgress?: CarveProgress,
+): HeightFieldPayload {
+  const session = setupCarve(stock, tool, gridRes);
+  const lastIdx = lastCarveIndex(moves, opIndex);
+  const total = lastIdx + 1;
+  // Throttle progress reporting to ~100 updates.
+  const reportEvery = Math.max(1, Math.floor(total / 100));
+
+  for (let i = 0; i <= lastIdx; i++) {
+    session.carveMove(moves[i]);
+    if (onProgress && (i % reportEvery === 0 || i === lastIdx)) {
+      onProgress(total > 0 ? (i + 1) / total : 1);
+    }
+  }
+
+  if (onProgress) onProgress(1);
+  return session.finalize();
 }

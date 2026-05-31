@@ -94,11 +94,14 @@ function moveColor(
   }
 }
 
-/** Build line-segment buffers for one model's additive view. */
+/** Build line-segment buffers for one model's additive view.
+ *  In 'realistic' mode (lines used only when the solid-tube toggle is off) the
+ *  segments are colored per tool from `filamentColors`. */
 export function buildLineBuffers(
   doc: GcodeDoc,
   layerRange: [number, number],
   colorBy: AdditiveColorBy,
+  filamentColors?: readonly string[],
 ): LineBuffers {
   const [lo, hi] = normalizeLayerRange(layerRange);
   const maxLayer = doc.meta.layerCount ? doc.meta.layerCount - 1 : 0;
@@ -121,6 +124,12 @@ export function buildLineBuffers(
 
   // Extrusion-only. Travel/non-printing moves are rendered separately as
   // always-on hairlines (see buildTravelBuffers).
+  // Realistic-mode line view: precompute per-tool RGB from the filament colors.
+  const filamentRgb: [number, number, number][] | null =
+    colorBy === 'realistic' && filamentColors
+      ? filamentColors.map((c) => hexToRgb(c))
+      : null;
+
   const verts: number[] = [];
   const cols: number[] = [];
 
@@ -129,7 +138,9 @@ export function buildLineBuffers(
     const layer = m.layer ?? 0;
     if (layer < lo || layer > hi) continue;
 
-    const c = moveColor(m, colorBy, maxLayer, feedMin, feedMax, false);
+    const c = filamentRgb
+      ? filamentRgb[(m.tool ?? 0) % filamentRgb.length]
+      : moveColor(m, colorBy, maxLayer, feedMin, feedMax, false);
     verts.push(m.start[0], m.start[1], m.start[2], m.end[0], m.end[1], m.end[2]);
     cols.push(c[0], c[1], c[2], c[0], c[1], c[2]);
   }
@@ -160,6 +171,8 @@ export interface InstanceData {
   /** 16 floats (column-major Matrix4) per extrusion bead. */
   matrices: Float32Array;
   count: number;
+  /** Tool index (T number) per bead — drives the per-tool filament color. */
+  tools: Uint16Array;
 }
 
 /**
@@ -185,6 +198,7 @@ export function buildInstanceMatrices(
   const xAxis = new THREE.Vector3(1, 0, 0);
 
   const out: number[] = [];
+  const tools: number[] = [];
   for (const mv of doc.moves) {
     if (!isExtruding(mv)) continue;
     const layer = mv.layer ?? 0;
@@ -200,6 +214,7 @@ export function buildInstanceMatrices(
     scl.set(len + width * 0.5, width, height);
     m.compose(pos, quat, scl);
     for (let i = 0; i < 16; i++) out.push(m.elements[i]);
+    tools.push(mv.tool ?? 0);
   }
-  return { matrices: new Float32Array(out), count: out.length / 16 };
+  return { matrices: new Float32Array(out), count: out.length / 16, tools: Uint16Array.from(tools) };
 }

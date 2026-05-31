@@ -3,6 +3,7 @@ import { DropZone } from './ingest/DropZone';
 import { FileInfo } from './ui/FileInfo';
 import { ControlPanel } from './ui/ControlPanel';
 import { LayerSlider } from './ui/LayerSlider';
+import { OpScrubber } from './ui/OpScrubber';
 import { StatsOverlay } from './ui/StatsOverlay';
 import { ColorLegend } from './ui/ColorLegend';
 import { CarveIndicator } from './ui/CarveIndicator';
@@ -23,6 +24,7 @@ export default function App() {
       <FileInfo />
       <ControlPanel />
       <LayerSlider />
+      <OpScrubber />
       <StatsOverlay />
       <ColorLegend />
       <CarveIndicator />

@@ -3,6 +3,7 @@ import { OrbitControls, Bounds } from '@react-three/drei';
 import type { ReactNode } from 'react';
 import * as THREE from 'three';
 import { SceneHelpers, FitController } from './Helpers';
+import { Measure } from './Measure';
 
 // The shared R3F scene host. Mode-specific models are passed in as children so
 // both additive and subtractive views share one camera, lighting, and controls.
@@ -30,6 +31,10 @@ export function Viewer({ children }: { children?: ReactNode }) {
         <FitController />
         {children}
       </Bounds>
+
+      {/* Right-click dimension tool — outside <Bounds> so its helper geometry
+          never feeds into auto-fit. */}
+      <Measure />
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
     </Canvas>

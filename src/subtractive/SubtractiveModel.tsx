@@ -20,6 +20,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore, activeDoc } from '../store.ts';
+import { buildBoundsTree, disposeBoundsTreeOf } from '../scene/bvh.ts';
+import { pointerNDC, setOrbitEnabled } from '../scene/interaction.ts';
 import { computeDefaultStock, DEFAULT_MIN } from './Stock.ts';
 import { wrap, proxy } from '../workers/comlink.ts';
 import type { Remote } from '../workers/comlink.ts';
@@ -266,9 +268,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       const s = useStore.getState().stock;
       if (!s) return;
 
-      const r = dom.getBoundingClientRect();
-      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-      raycaster.setFromCamera(ndc, camera);
+      raycaster.setFromCamera(pointerNDC(e.clientX, e.clientY, dom, ndc), camera);
 
       // Plane normal = view direction projected perpendicular to the drag axis,
       // so the plane contains the axis and most faces the camera.
@@ -296,7 +296,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
     const endDrag = () => {
       if (!drag.current) return;
       drag.current = null;
-      if (controls) (controls as { enabled?: boolean }).enabled = true;
+      setOrbitEnabled(controls, true);
       setStockDragging(false); // drag finished → allow the carve to run once
     };
 
@@ -319,7 +319,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       faceCoord: side === 'min' ? b.min.getComponent(axis) : b.max.getComponent(axis),
     };
     setStockDragging(true);
-    if (controls) (controls as { enabled?: boolean }).enabled = false;
+    setOrbitEnabled(controls, false);
   };
 
   return (
@@ -386,7 +386,9 @@ export function SubtractiveModel() {
   const storeStock = useStore((s) => s.stock);
   const gridRes = useStore((s) => s.gridRes);
   const tool = useStore((s) => s.tool);
-  const opIndex = useStore((s) => s.opIndex);
+  const opIndex = useStore((s) => s.activeOpIndex());
+  const showBounds = useStore((s) => s.showBounds);
+  const showTravel = useStore((s) => s.showTravel);
   const effectiveMode = useStore((s) => s.effectiveMode);
   const stockColor = useStore((s) => s.stockColor);
   const showStockEditor = useStore((s) => s.showStockEditor);
@@ -420,6 +422,21 @@ export function SubtractiveModel() {
   const carvedSig = useRef<string | null>(null);
   const carvedDoc = useRef<typeof doc>(null);
 
+  // When the active FILE changes, drop the previous workpiece immediately so a
+  // stale part is never left on screen while the new one parses/carves. (Mode
+  // switches keep the geometry — see below — only a genuine doc change clears.)
+  useEffect(() => {
+    if (carvedDoc.current && carvedDoc.current !== doc) {
+      if (geomRef.current) {
+        disposeBoundsTreeOf(geomRef.current);
+        geomRef.current.dispose();
+        geomRef.current = null;
+      }
+      carvedSig.current = null;
+      setGeometry(null);
+    }
+  }, [doc]);
+
   // Carve whenever the carve INPUTS change. Leaving subtractive mode does NOT
   // dispose the geometry — it is kept so switching back shows it instantly.
   useEffect(() => {
@@ -451,8 +468,13 @@ export function SubtractiveModel() {
       .then((hf: HeightFieldPayload) => {
         if (cancelled) return;
         const geom = buildSolidGeometry(hf);
+        // Build a BVH so the measure tool can raycast this dense mesh cheaply.
+        buildBoundsTree(geom);
         // Dispose the previous geometry before swapping in the new one.
-        if (geomRef.current) geomRef.current.dispose();
+        if (geomRef.current) {
+          disposeBoundsTreeOf(geomRef.current);
+          geomRef.current.dispose();
+        }
         geomRef.current = geom;
         carvedDoc.current = doc;
         carvedSig.current = sig;
@@ -477,11 +499,48 @@ export function SubtractiveModel() {
   useEffect(() => {
     return () => {
       if (geomRef.current) {
+        disposeBoundsTreeOf(geomRef.current);
         geomRef.current.dispose();
         geomRef.current = null;
       }
     };
   }, []);
+
+  // Travel (rapid / non-cutting G0) moves as always-on hairlines — the same
+  // "evidence of travel" the additive view shows. Only rapids: cutting motion is
+  // already embodied by the carved surface.
+  const travel = useMemo(() => {
+    const verts: number[] = [];
+    if (doc) {
+      for (const m of doc.moves) {
+        if (m.type !== 'rapid') continue;
+        verts.push(m.start[0], m.start[1], m.start[2], m.end[0], m.end[1], m.end[2]);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+    return { g, count: verts.length / 6 };
+  }, [doc]);
+  useEffect(() => () => travel.g.dispose(), [travel]);
+
+  // Selection box: bound the CUTTING moves (cut/arc), not the whole toolpath.
+  // The toolpath bbox includes rapids at clearance height, which would float the
+  // box well above the machined surface; cut extents hug the actual features.
+  const selBox = useMemo(() => {
+    if (!doc) return null;
+    const box = new THREE.Box3();
+    const v = new THREE.Vector3();
+    let any = false;
+    for (const m of doc.moves) {
+      if (m.type !== 'cut' && m.type !== 'arcCW' && m.type !== 'arcCCW') continue;
+      box.expandByPoint(v.set(...m.start));
+      box.expandByPoint(v.set(...m.end));
+      any = true;
+    }
+    // No cutting moves found → fall back to the full work bbox.
+    if (!any) box.set(new THREE.Vector3(...doc.bbox.min), new THREE.Vector3(...doc.bbox.max));
+    return box;
+  }, [doc]);
 
   // Hidden (but geometry retained) when not in subtractive mode.
   if (!active) return null;
@@ -498,6 +557,12 @@ export function SubtractiveModel() {
           />
         </mesh>
       )}
+      {showTravel && travel.count > 0 && (
+        <lineSegments geometry={travel.g}>
+          <lineBasicMaterial color="#7a8a99" transparent opacity={0.6} depthWrite={false} />
+        </lineSegments>
+      )}
+      {showBounds && selBox && <box3Helper args={[selBox, new THREE.Color('#ffd166')]} />}
       {stock && showStockEditor && <StockEditor stock={stock} color={stockColor} />}
     </>
   );

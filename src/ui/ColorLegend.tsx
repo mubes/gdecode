@@ -19,18 +19,38 @@ export function ColorLegend() {
   const mode = useStore((s) => s.effectiveMode());
   const colorBy = useStore((s) => s.colorBy);
   const doc = useStore(activeDoc);
-  const filament = useStore((s) => s.filamentColor);
+  const filamentColors = useStore((s) => s.filamentColors);
+  const setFilamentColor = useStore((s) => s.setFilamentColor);
   if (mode !== 'additive' || !doc) return null;
 
+  // Tools actually referenced by the file (fall back to T0).
+  const tools = doc.meta.tools && doc.meta.tools.length ? doc.meta.tools : [0];
+
   let content: React.ReactNode;
-  if (colorBy === 'realistic') {
-    content = <Swatch color={filament} label="as printed" />;
-  } else if (colorBy === 'layer') {
+  if (colorBy === 'layer') {
     content = <Bar leftLabel="bottom layer" rightLabel="top layer" />;
   } else if (colorBy === 'feedrate') {
     content = <Bar leftLabel="slow" rightLabel="fast" />;
+  } else if (colorBy === 'realistic') {
+    // Editable filament colours — native colour wells (just a swatch, no hex).
+    // Each tool T maps to filament slot T % 4.
+    content = (
+      <>
+        {tools.map((t) => {
+          const slot = t % filamentColors.length;
+          return (
+            <ColorWell
+              key={t}
+              color={filamentColors[slot]}
+              label={`T${t}`}
+              onChange={(c) => setFilamentColor(slot, c)}
+            />
+          );
+        })}
+      </>
+    );
   } else {
-    const tools = doc.meta.tools && doc.meta.tools.length ? doc.meta.tools : [0];
+    // 'tool' — passive diagnostic palette swatches.
     content = (
       <>
         {tools.map((t) => (
@@ -92,6 +112,48 @@ function Swatch({ color, label }: { color: string; label: string }) {
       <span style={{ width: 11, height: 11, borderRadius: 3, background: color, display: 'inline-block' }} />
       {label}
     </span>
+  );
+}
+
+/** An editable colour swatch backed by a native <input type="color"> — shows
+ *  only the swatch (no hex). pointerEvents is re-enabled here since the legend
+ *  container disables them. */
+function ColorWell({
+  color,
+  label,
+  onChange,
+}: {
+  color: string;
+  label: string;
+  onChange: (c: string) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        pointerEvents: 'auto',
+        cursor: 'pointer',
+      }}
+      title={`${label} filament colour`}
+    >
+      <input
+        type="color"
+        value={color}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          width: 16,
+          height: 16,
+          padding: 0,
+          border: '1px solid #555',
+          borderRadius: 3,
+          background: 'none',
+          cursor: 'pointer',
+        }}
+      />
+      {label}
+    </label>
   );
 }
 

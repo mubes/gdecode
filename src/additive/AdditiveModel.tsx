@@ -18,7 +18,13 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { useStore, type ModelEntry } from '../store';
-import { buildLineBuffers, buildInstanceMatrices, buildTravelBuffers } from './buildGeometry';
+import { pointerNDC, setOrbitEnabled } from '../scene/interaction';
+import {
+  buildLineBuffers,
+  buildInstanceMatrices,
+  buildTravelBuffers,
+  hexToRgb,
+} from './buildGeometry';
 
 export function AdditiveModels() {
   const models = useStore((s) => s.models);
@@ -36,9 +42,7 @@ export function AdditiveModels() {
     const pt = new THREE.Vector3();
     const onMove = (e: PointerEvent) => {
       if (!dragId.current) return;
-      const r = dom.getBoundingClientRect();
-      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-      raycaster.setFromCamera(ndc, camera);
+      raycaster.setFromCamera(pointerNDC(e.clientX, e.clientY, dom, ndc), camera);
       if (raycaster.ray.intersectPlane(plane, pt)) {
         useStore
           .getState()
@@ -48,7 +52,7 @@ export function AdditiveModels() {
     const onUp = () => {
       if (dragId.current) {
         dragId.current = null;
-        if (controls) (controls as { enabled?: boolean }).enabled = true;
+        setOrbitEnabled(controls, true);
       }
     };
     window.addEventListener('pointermove', onMove);
@@ -68,7 +72,7 @@ export function AdditiveModels() {
     grab.current = [e.point.x - m.position[0], e.point.y - m.position[1]];
     dragId.current = id;
     useStore.getState().selectModel(id);
-    if (controls) (controls as { enabled?: boolean }).enabled = false; // pause orbit while dragging
+    setOrbitEnabled(controls, false); // pause orbit while dragging
   };
 
   return (
@@ -93,21 +97,26 @@ function AdditiveModelObject({
   const colorBy = useStore((s) => s.colorBy);
   const renderTubes = useStore((s) => s.renderTubes);
   const extrusionWidth = useStore((s) => s.extrusionWidth);
-  const filamentColor = useStore((s) => s.filamentColor);
+  const filamentColors = useStore((s) => s.filamentColors);
   const showTravel = useStore((s) => s.showTravel);
   const showBounds = useStore((s) => s.showBounds);
   const selectedId = useStore((s) => s.selectedId);
   const size = useThree((s) => s.size);
 
   const realistic = colorBy === 'realistic';
+  // Solid beads are the realistic view ONLY while the "solid (tubes)" toggle is
+  // on. Turning it off drops to thin filament-colored lines, so the toggle has a
+  // visible effect in realistic mode too (not just the diagnostic colormaps).
+  const wantBeads = realistic && renderTubes;
 
-  // Diagnostic line buffers (skipped in realistic mode).
+  // Line buffers — needed for every view EXCEPT solid realistic beads. In
+  // realistic mode they're colored per tool from the filament palette.
   const buffers = useMemo(
     () =>
-      realistic
+      wantBeads
         ? { positions: new Float32Array(), colors: new Float32Array(), segmentCount: 0 }
-        : buildLineBuffers(model.doc, layerRange, colorBy),
-    [realistic, model.doc, layerRange, colorBy],
+        : buildLineBuffers(model.doc, layerRange, colorBy, filamentColors),
+    [wantBeads, model.doc, layerRange, colorBy, filamentColors],
   );
 
   const thinGeom = useMemo(() => {
@@ -144,16 +153,19 @@ function AdditiveModelObject({
   }, [model.doc, bb, extrusionWidth]);
 
   const instances = useMemo(
-    () => (realistic ? buildInstanceMatrices(model.doc, layerRange, extrusionWidth, layerHeight) : null),
-    [realistic, model.doc, layerRange, extrusionWidth, layerHeight],
+    () => (wantBeads ? buildInstanceMatrices(model.doc, layerRange, extrusionWidth, layerHeight) : null),
+    [wantBeads, model.doc, layerRange, extrusionWidth, layerHeight],
   );
 
   // Build the InstancedMesh imperatively (robust vs. R3F args/children timing).
+  // Per-bead color comes from the filament palette via an instanceColor buffer
+  // (the material stays white so instanceColor shows through unmodulated).
   const inst = useMemo(() => {
     if (!instances) return null;
     const geom = new THREE.BoxGeometry(1, 1, 1);
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.7, metalness: 0.05 });
-    const mesh = new THREE.InstancedMesh(geom, mat, Math.max(1, instances.count));
+    const n = Math.max(1, instances.count);
+    const mesh = new THREE.InstancedMesh(geom, mat, n);
     const m = new THREE.Matrix4();
     for (let i = 0; i < instances.count; i++) {
       m.fromArray(instances.matrices, i * 16);
@@ -161,13 +173,23 @@ function AdditiveModelObject({
     }
     mesh.count = instances.count;
     mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
     mesh.computeBoundingSphere();
-    return { mesh, geom, mat };
+    return { mesh, geom, mat, tools: instances.tools };
   }, [instances]);
 
+  // (Re)paint each bead from its tool's filament color whenever the palette or
+  // the instance set changes.
   useEffect(() => {
-    if (inst) inst.mat.color.set(filamentColor);
-  }, [inst, filamentColor]);
+    if (!inst || !inst.mesh.instanceColor) return;
+    const col = inst.mesh.instanceColor;
+    const { tools } = inst;
+    for (let i = 0; i < tools.length; i++) {
+      const [r, g, b] = hexToRgb(filamentColors[tools[i] % filamentColors.length]);
+      col.setXYZ(i, r, g, b);
+    }
+    col.needsUpdate = true;
+  }, [inst, filamentColors]);
   useEffect(
     () => () => {
       if (inst) {
@@ -207,7 +229,7 @@ function AdditiveModelObject({
   return (
     <group position={model.position} scale={model.scale}>
       <group position={offset}>
-        {realistic && inst ? (
+        {wantBeads && inst ? (
           <primitive object={inst.mesh} onPointerDown={grab} />
         ) : renderTubes ? (
           <primitive object={fat.obj} onPointerDown={grab} />

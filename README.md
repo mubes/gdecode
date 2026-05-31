@@ -4,6 +4,8 @@ Drag‑and‑drop a G‑code file and `gdecode` renders the **artifact the machi
 
 It runs **entirely client‑side**: a static single‑page app, no backend. Your files never leave the browser, and the build drops onto any static host.
 
+![gdecode rendering a carved subtractive workpiece](./assets/mainscreen.png)
+
 > See [`PLAN.md`](./PLAN.md) for the full design rationale and phase plan.
 
 ## Features
@@ -11,12 +13,14 @@ It runs **entirely client‑side**: a static single‑page app, no backend. Your
 - **Drag‑and‑drop ingest** (`.gcode`, `.nc`, `.tap`, `.ngc`, `.cnc`, `.g`) with click‑to‑browse and parse‑error toasts.
 - **Automatic mode detection** — scores extrusion vs. spindle/tool signals to pick additive or subtractive, with a manual override.
 - **Additive (FDM) view** — renders the print from the parsed toolpath:
-  - *as printed* (lit solid beads in a chosen filament color), or diagnostic colormaps by **layer**, **feed rate**, or **tool**;
+  - *as printed* (lit solid beads, colored per tool from **up to four filament colours** for T0–T3, edited via the swatches in the bottom legend), or diagnostic colormaps by **layer**, **feed rate**, or **tool**;
   - a vertical **Z‑layer range slider** to peel layers;
-  - line ↔ solid (world‑unit tube) toggle and always‑on travel‑move hairlines;
-  - **multiple models** on one build plate — each selectable, draggable on the XY plane, and scalable.
+  - solid ↔ line (the *solid (tubes)* toggle, which also drops the realistic view to thin filament lines) and always‑on travel‑move hairlines;
+  - **multiple models** on one build plate — each selectable and draggable on the XY plane.
 - **Subtractive (CNC) view** — a true **3‑axis height‑map material‑removal simulation**: a stock block is carved into the real machined surface (flat / ball / V‑bit tools), with an **operation scrubber** and a recompute progress indicator. The stock starts as a 100 × 100 × 10 mm block that auto‑fits a loaded file's extremities, and its bounds are edited by **dragging the arrow handle on each face directly in the 3D view** (hold **Shift** for fine adjustment; live dimensions shown in the info panel; the carve recomputes once you release); lowering the bottom face past a cut opens a real **cut‑through**. The handles can be hidden, and the workpiece colour is configurable.
 - **Shared Z‑up scene** — one camera, grid, axes, view‑cube gizmo, fit‑to‑frame, and an FPS overlay across both modes.
+- **Right‑click dimension tool** — right‑click to drop the start point, again for the end (drawing a live dimension line + length), and a third time to clear. Points snap to the nearest feature corner and quantise to **1/100 mm**; hold **CTRL** to constrain to a primary axis (X/Y/Z), **Esc** to cancel.
+- **Mode lock** — the first loaded file fixes the session to additive *or* subtractive; files of the other mode are rejected (clear the loaded models to switch). Each loaded file keeps its **own operation‑scrubber** position.
 
 ## Stack
 
@@ -93,3 +97,4 @@ Unit tests cover IR correctness (units G20/G21, abs/rel G90/G91, G92 offset, arc
 - A single‑Z height map cannot represent **undercuts** — correct for true 3‑axis work, but 4/5‑axis or undercut geometry needs a multi‑dexel/voxel approach (a stretch goal in `PLAN.md`).
 - The GPU carve path (`carveGpu.ts`) is a documented stub; carving runs on the CPU in a worker.
 - The main JS bundle is ~1.4 MB (Three.js); acceptable for a static viewer, but code‑splitting is an easy future win.
+- This was written with the assistance of Claude Opus 4.8 because I needed something to be able to see what chips I was about to make. That may or may not be a problem for you, but you should be aware of it.

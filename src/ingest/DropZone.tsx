@@ -22,7 +22,6 @@ export function DropZone() {
   const addModel = useStore((s) => s.addModel);
   const setError = useStore((s) => s.setError);
   const status = useStore((s) => s.status);
-  const modelCount = useStore((s) => s.models.length);
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -69,6 +68,15 @@ export function DropZone() {
           beginParse(file.name);
           const api = getApi();
           const doc: GcodeDoc = await api.parse(text);
+          // Once a mode is established by the first file, refuse files of the
+          // other mode — additive and subtractive parts don't share a scene.
+          const existing = useStore.getState().models;
+          if (existing.length && existing[0].doc.mode !== doc.mode) {
+            const msg = `${file.name} is ${doc.mode}, but the current view is ${existing[0].doc.mode}. Clear loaded models to switch modes.`;
+            setError(msg);
+            showToast(msg);
+            continue;
+          }
           addModel(file.name, doc);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -125,54 +133,39 @@ export function DropZone() {
         </div>
       )}
 
-      {/* Persistent "drop another file" affordance, once something is loaded. */}
+      {/* Persistent "Open" affordance in the bottom-left corner, once something
+          is loaded. (Bottom-left keeps it clear of the control panel pulldown.)
+          The old "or drop more" hint is gone — drops only land on this small
+          chip, so the button is the reliable way to add a file. */}
       {!idle && (
         <div
-          {...getRootProps()}
           style={{
             position: 'fixed',
-            top: 12,
-            right: 12,
+            bottom: 12,
+            left: 12,
             zIndex: 20,
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            padding: '6px 10px',
-            borderRadius: 8,
-            fontSize: 12,
-            background: isDragActive ? 'rgba(60,90,140,0.6)' : 'rgba(30,30,38,0.85)',
-            border: isDragActive ? '1px solid #6da7ff' : '1px solid #3a3a44',
-            color: '#ccc',
-            backdropFilter: 'blur(4px)',
-            cursor: 'pointer',
           }}
         >
-          <input {...getInputProps()} />
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              open();
-            }}
+            onClick={() => open()}
             style={{
               background: '#3a5a8c',
               color: '#fff',
               border: 'none',
               borderRadius: 6,
-              padding: '4px 8px',
+              padding: '6px 12px',
               fontSize: 12,
               cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
             }}
           >
             Open…
           </button>
-          <span style={{ opacity: 0.75 }}>
-            {parsing
-              ? 'Parsing…'
-              : isDragActive
-                ? 'Drop to load'
-                : `or drop more (${modelCount} loaded)`}
-          </span>
+          {parsing && <span style={{ opacity: 0.75, fontSize: 12, color: '#ccc' }}>Parsing…</span>}
         </div>
       )}
 
