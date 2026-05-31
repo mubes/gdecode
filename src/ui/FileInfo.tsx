@@ -107,14 +107,17 @@ function Details({ mode }: { mode: string }) {
   const stock = useStore((s) => s.stock);
   if (!doc) return null;
   const { bbox, units, moves, meta } = doc;
+  // Geometry is always converted to mm at parse time (G20 inch files included),
+  // so every displayed measurement is in mm regardless of the file's declared
+  // units. The "Units (file)" row reports what the file declared.
   const rows: [string, string][] = [
     ['Mode', mode],
-    ['Units', units],
+    ['Units (file)', units],
     [
       'Size',
       `${fmt(bbox.max[0] - bbox.min[0])} × ${fmt(bbox.max[1] - bbox.min[1])} × ${fmt(
         bbox.max[2] - bbox.min[2],
-      )} ${units}`,
+      )} mm`,
     ],
     ['Moves', moves.length.toLocaleString()],
   ];
@@ -126,11 +129,11 @@ function Details({ mode }: { mode: string }) {
     const [ox, oy, oz] = stock.origin;
     rows.push([
       'Stock',
-      `${fmt(stock.sizeX)} × ${fmt(stock.sizeY)} × ${fmt(stock.sizeZ)} ${units}`,
+      `${fmt(stock.sizeX)} × ${fmt(stock.sizeY)} × ${fmt(stock.sizeZ)} mm`,
     ]);
-    rows.push(['Stock X', `${fmt(ox)} … ${fmt(ox + stock.sizeX)}`]);
-    rows.push(['Stock Y', `${fmt(oy)} … ${fmt(oy + stock.sizeY)}`]);
-    rows.push(['Stock Z', `${fmt(oz)} … ${fmt(oz + stock.sizeZ)}`]);
+    rows.push(['Stock X', `${fmt(ox)} … ${fmt(ox + stock.sizeX)} mm`]);
+    rows.push(['Stock Y', `${fmt(oy)} … ${fmt(oy + stock.sizeY)} mm`]);
+    rows.push(['Stock Z', `${fmt(oz)} … ${fmt(oz + stock.sizeZ)} mm`]);
   }
 
   return (

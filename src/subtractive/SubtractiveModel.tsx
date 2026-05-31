@@ -203,18 +203,30 @@ function resizeStock(s: StockDef, axis: 0 | 1 | 2, side: 'min' | 'max', coord: n
   return { origin, sizeX: size[0], sizeY: size[1], sizeZ: size[2] };
 }
 
+/** Shift-drag moves a face at this fraction of the pointer delta (fine adjust). */
+const SHIFT_SCALE = 0.15;
+
 /**
  * Renders the stock as a wireframe box with a draggable handle on each of its
- * six faces. Dragging a handle slides that face along its axis (updating the
- * store's stock live); orbit controls pause while dragging. On release the
- * leva stock sliders are nudged to re-seed (bumpStockEdit) so panel + viewport
- * stay consistent.
+ * six faces. Dragging a handle slides that face along its axis; the box, arrows
+ * and info readout update live, but the (expensive) carve is deferred until the
+ * drag ends (store.stockDragging). Orbit controls pause while dragging, and
+ * holding Shift moves the face in much finer increments.
  */
 function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
   const { camera, gl, raycaster, controls } = useThree();
   const editStock = useStore((s) => s.editStock);
+  const setStockDragging = useStore((s) => s.setStockDragging);
 
-  const drag = useRef<{ axis: 0 | 1 | 2; side: 'min' | 'max' } | null>(null);
+  // grabCoord = pointer's axis coord at grab; baseFaceCoord = the face's coord
+  // at grab. The face is then moved by the (optionally Shift-scaled) delta, so
+  // there is no jump when grabbing the arrow head and Shift gives fine control.
+  const drag = useRef<{
+    axis: 0 | 1 | 2;
+    side: 'min' | 'max';
+    grabCoord: number;
+    baseFaceCoord: number;
+  } | null>(null);
 
   const { min, max } = useMemo(() => stockBounds(stock), [stock]);
   const center = useMemo(
@@ -274,13 +286,17 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       plane.setFromNormalAndCoplanarPoint(n, pt);
 
       if (!raycaster.ray.intersectPlane(plane, hit)) return;
-      editStock(resizeStock(s, d.axis, d.side, hit.getComponent(d.axis)));
+      const raw = hit.getComponent(d.axis);
+      const factor = e.shiftKey ? SHIFT_SCALE : 1;
+      const newCoord = d.baseFaceCoord + (raw - d.grabCoord) * factor;
+      editStock(resizeStock(s, d.axis, d.side, newCoord));
     };
 
     const onUp = () => {
       if (!drag.current) return;
       drag.current = null;
       if (controls) (controls as { enabled?: boolean }).enabled = true;
+      setStockDragging(false); // drag finished → allow the carve to run once
     };
 
     window.addEventListener('pointermove', onMove);
@@ -289,11 +305,18 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [camera, gl, raycaster, controls, editStock]);
+  }, [camera, gl, raycaster, controls, editStock, setStockDragging]);
 
   const onGrab = (axis: 0 | 1 | 2, side: 'min' | 'max') => (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
-    drag.current = { axis, side };
+    const b = stockBounds(useStore.getState().stock ?? stock);
+    drag.current = {
+      axis,
+      side,
+      grabCoord: e.point.getComponent(axis),
+      baseFaceCoord: side === 'min' ? b.min.getComponent(axis) : b.max.getComponent(axis),
+    };
+    setStockDragging(true);
     if (controls) (controls as { enabled?: boolean }).enabled = false;
   };
 
@@ -337,7 +360,8 @@ function FaceArrow({
   const coneH = size * 0.4;
   const coneR = size * 0.16;
   const shaftR = size * 0.05;
-  const shaftLen = Math.max(size - coneH, size * 0.3);
+  // Half-length stalk (less visual reach than the cone).
+  const shaftLen = Math.max(size - coneH, size * 0.3) * 0.5;
 
   return (
     <group position={position} quaternion={quat} onPointerDown={onPointerDown}>
@@ -364,6 +388,7 @@ export function SubtractiveModel() {
   const effectiveMode = useStore((s) => s.effectiveMode);
   const stockColor = useStore((s) => s.stockColor);
   const showStockEditor = useStore((s) => s.showStockEditor);
+  const stockDragging = useStore((s) => s.stockDragging);
   const setStock = useStore((s) => s.setStock);
   const setProgress = useStore((s) => s.setProgress);
   const setStatus = useStore((s) => s.setStatus);
@@ -396,7 +421,9 @@ export function SubtractiveModel() {
   // Carve whenever the carve INPUTS change. Leaving subtractive mode does NOT
   // dispose the geometry — it is kept so switching back shows it instantly.
   useEffect(() => {
-    if (!active || !doc || !stock) return; // keep any existing workpiece
+    // Keep any existing workpiece; also defer the carve while a face is being
+    // dragged (it runs once on release, not every frame).
+    if (!active || !doc || !stock || stockDragging) return;
 
     // Already carved with these exact inputs? Reuse the cached geometry.
     const sig = JSON.stringify({ stock, tool, gridRes, opIndex });
@@ -442,7 +469,7 @@ export function SubtractiveModel() {
       cancelled = true;
       worker.terminate();
     };
-  }, [active, doc, stock, tool, gridRes, opIndex, setProgress, setStatus]);
+  }, [active, doc, stock, tool, gridRes, opIndex, stockDragging, setProgress, setStatus]);
 
   // Dispose geometry on unmount.
   useEffect(() => {

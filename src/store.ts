@@ -58,6 +58,9 @@ export interface AppState {
   /** True once the user has changed the stock manually (3D face drag).
    *  While false, loading a file auto-fits the stock to the work extremities. */
   stockUserEdited: boolean;
+  /** True while a stock face is being dragged. The carve is deferred until this
+   *  clears (drag end) so the expensive recompute runs once, not per frame. */
+  stockDragging: boolean;
   /** Show the draggable stock-bounds box + handles in the subtractive view. */
   showStockEditor: boolean;
 
@@ -99,6 +102,7 @@ export interface AppState {
   setTool: (t: ToolDef) => void;
   setOpIndex: (n: number) => void;
   setStockColor: (c: string) => void;
+  setStockDragging: (v: boolean) => void;
   setShowStockEditor: (v: boolean) => void;
   setShowGrid: (v: boolean) => void;
   setShowAxes: (v: boolean) => void;
@@ -159,6 +163,7 @@ export const useStore = create<AppState>((set, get) => ({
   opIndex: -1,
   stockColor: '#b8b8c0',
   stockUserEdited: false,
+  stockDragging: false,
   showStockEditor: true,
 
   showGrid: true,
@@ -243,6 +248,7 @@ export const useStore = create<AppState>((set, get) => ({
   setTool: (tool) => set({ tool }),
   setOpIndex: (opIndex) => set({ opIndex }),
   setStockColor: (stockColor) => set({ stockColor }),
+  setStockDragging: (stockDragging) => set({ stockDragging }),
   setShowStockEditor: (showStockEditor) => set({ showStockEditor }),
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowAxes: (showAxes) => set({ showAxes }),
