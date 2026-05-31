@@ -8,7 +8,8 @@ import { useStore, activeDoc } from '../store';
 
 function fmt(n: number): string {
   if (!isFinite(n)) return '–';
-  return (Math.round(n * 100) / 100).toString();
+  const s = n.toFixed(2); // always 2 dp, including trailing zeros
+  return s === '-0.00' ? '0.00' : s;
 }
 
 export function FileInfo() {

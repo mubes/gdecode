@@ -218,14 +218,14 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
   const editStock = useStore((s) => s.editStock);
   const setStockDragging = useStore((s) => s.setStockDragging);
 
-  // grabCoord = pointer's axis coord at grab; baseFaceCoord = the face's coord
-  // at grab. The face is then moved by the (optionally Shift-scaled) delta, so
-  // there is no jump when grabbing the arrow head and Shift gives fine control.
+  // The face is moved by accumulating per-frame pointer deltas (each optionally
+  // Shift-scaled). Incremental — so there is no jump when grabbing the arrow
+  // head, and toggling Shift mid-drag only changes the rate going forward.
   const drag = useRef<{
     axis: 0 | 1 | 2;
     side: 'min' | 'max';
-    grabCoord: number;
-    baseFaceCoord: number;
+    lastRaw: number; // previous pointer axis coord
+    faceCoord: number; // current accumulated face coord
   } | null>(null);
 
   const { min, max } = useMemo(() => stockBounds(stock), [stock]);
@@ -288,11 +288,12 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       if (!raycaster.ray.intersectPlane(plane, hit)) return;
       const raw = hit.getComponent(d.axis);
       const factor = e.shiftKey ? SHIFT_SCALE : 1;
-      const newCoord = d.baseFaceCoord + (raw - d.grabCoord) * factor;
-      editStock(resizeStock(s, d.axis, d.side, newCoord));
+      d.faceCoord += (raw - d.lastRaw) * factor; // accumulate scaled increment
+      d.lastRaw = raw;
+      editStock(resizeStock(s, d.axis, d.side, d.faceCoord));
     };
 
-    const onUp = () => {
+    const endDrag = () => {
       if (!drag.current) return;
       drag.current = null;
       if (controls) (controls as { enabled?: boolean }).enabled = true;
@@ -300,10 +301,11 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
     };
 
     window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointerup', endDrag);
     return () => {
       window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', endDrag);
+      endDrag(); // safety: never leave stockDragging stuck on unmount mid-drag
     };
   }, [camera, gl, raycaster, controls, editStock, setStockDragging]);
 
@@ -313,8 +315,8 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
     drag.current = {
       axis,
       side,
-      grabCoord: e.point.getComponent(axis),
-      baseFaceCoord: side === 'min' ? b.min.getComponent(axis) : b.max.getComponent(axis),
+      lastRaw: e.point.getComponent(axis),
+      faceCoord: side === 'min' ? b.min.getComponent(axis) : b.max.getComponent(axis),
     };
     setStockDragging(true);
     if (controls) (controls as { enabled?: boolean }).enabled = false;
