@@ -1,7 +1,7 @@
 import { Leva, useControls, folder, button } from 'leva';
 import { useStore, activeDoc } from '../store';
 import type { AdditiveColorBy } from '../store';
-import type { Mode, ToolKind, StockDef } from '../types';
+import type { Mode, ToolKind } from '../types';
 
 // ---------------------------------------------------------------------------
 // gdecode — leva control panel. ONE useControls call builds the whole schema
@@ -25,8 +25,6 @@ const MODE_OPTIONS: Record<string, Mode | null> = {
   Subtractive: 'subtractive',
 };
 
-const DEFAULT_STOCK: StockDef = { origin: [0, 0, 0], sizeX: 100, sizeY: 100, sizeZ: 20 };
-
 export function ControlPanel() {
   const doc = useStore(activeDoc);
   const selectedId = useStore((s) => s.selectedId);
@@ -39,9 +37,7 @@ export function ControlPanel() {
   const opIndex = useStore((s) => s.opIndex);
   const gridRes = useStore((s) => s.gridRes);
   const tool = useStore((s) => s.tool);
-  const stock = useStore((s) => s.stock);
   const stockColor = useStore((s) => s.stockColor);
-  const stockEditNonce = useStore((s) => s.stockEditNonce);
   const showStockEditor = useStore((s) => s.showStockEditor);
   const showGrid = useStore((s) => s.showGrid);
   const showAxes = useStore((s) => s.showAxes);
@@ -53,40 +49,10 @@ export function ControlPanel() {
   const detectedMode: Mode | null = doc?.mode ?? null;
 
   const moveCount = doc?.moves.length ?? 0;
-  const curStock = stock ?? DEFAULT_STOCK;
   const modelScale = activeModel?.scale ?? 1;
-
-  // Stock slider bounds: the toolpath bbox expanded by a generous per-axis
-  // margin (≥ the axis extent, min 100mm) so the stock can be grown well
-  // beyond the cut envelope. Dragging the stock faces in the 3D view sets the
-  // same values; these wider ranges keep that room available on the sliders.
-  const bnd = (axis: 0 | 1 | 2): [number, number] => {
-    if (!doc) return [-200, 200];
-    const lo = doc.bbox.min[axis];
-    const hi = doc.bbox.max[axis];
-    const pad = Math.max(100, hi - lo);
-    return [Math.floor(lo - pad), Math.ceil(hi + pad)];
-  };
 
   const isAdditive = effectiveMode === 'additive';
   const isSubtractive = effectiveMode === 'subtractive';
-
-  // Current stock extents as [min,max] per axis.
-  const sx: [number, number] = [curStock.origin[0], curStock.origin[0] + curStock.sizeX];
-  const sy: [number, number] = [curStock.origin[1], curStock.origin[1] + curStock.sizeY];
-  const sz: [number, number] = [curStock.origin[2], curStock.origin[2] + curStock.sizeZ];
-
-  const setStockAxis = (axis: 0 | 1 | 2, min: number, max: number) => {
-    const s = useStore.getState().stock ?? DEFAULT_STOCK;
-    const origin: [number, number, number] = [...s.origin];
-    origin[axis] = min;
-    const size = { sizeX: s.sizeX, sizeY: s.sizeY, sizeZ: s.sizeZ };
-    if (axis === 0) size.sizeX = max - min;
-    if (axis === 1) size.sizeY = max - min;
-    if (axis === 2) size.sizeZ = max - min;
-    // A slider change is a deliberate user edit (stops load-time auto-fitting).
-    useStore.getState().editStock({ origin, ...size });
-  };
 
   useControls(
     () => {
@@ -209,40 +175,8 @@ export function ControlPanel() {
               useStore.getState().setTool({ ...useStore.getState().tool, vAngle: v });
             },
           },
-          // Stock = base material bounds as X/Y/Z min..max interval sliders.
-          stockX: {
-            label: 'stock X (min..max)',
-            value: sx,
-            min: bnd(0)[0],
-            max: bnd(0)[1],
-            step: 1,
-            onChange: (v: [number, number], _p, { initial }) => {
-              if (initial) return;
-              setStockAxis(0, Math.min(v[0], v[1]), Math.max(v[0], v[1]));
-            },
-          },
-          stockY: {
-            label: 'stock Y (min..max)',
-            value: sy,
-            min: bnd(1)[0],
-            max: bnd(1)[1],
-            step: 1,
-            onChange: (v: [number, number], _p, { initial }) => {
-              if (initial) return;
-              setStockAxis(1, Math.min(v[0], v[1]), Math.max(v[0], v[1]));
-            },
-          },
-          stockZ: {
-            label: 'stock Z (min..max)',
-            value: sz,
-            min: bnd(2)[0],
-            max: bnd(2)[1],
-            step: 1,
-            onChange: (v: [number, number], _p, { initial }) => {
-              if (initial) return;
-              setStockAxis(2, Math.min(v[0], v[1]), Math.max(v[0], v[1]));
-            },
-          },
+          // Stock bounds are edited by dragging the face arrows in the 3D view
+          // (the live dimensions show in the file-info panel). No sliders here.
           stockColor: {
             label: 'stock color',
             value: stockColor,
@@ -309,10 +243,9 @@ export function ControlPanel() {
       return schema;
     },
     // Structural deps only (live-edited values excluded to avoid mid-drag
-    // rebuilds). selectedId rebuilds so per-model controls (scale) + stock
-    // bounds re-seed when the active model changes; stockEditNonce re-seeds the
-    // stock sliders once after a face is dragged in the 3D view.
-    [isAdditive, isSubtractive, detectedMode, modeOverride, moveCount, selectedId, stockEditNonce],
+    // rebuilds). selectedId rebuilds so per-model controls (scale) re-seed when
+    // the active model changes.
+    [isAdditive, isSubtractive, detectedMode, modeOverride, moveCount, selectedId],
   );
 
   return <Leva collapsed={false} />;

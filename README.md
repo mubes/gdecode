@@ -15,7 +15,7 @@ It runs **entirely client‑side**: a static single‑page app, no backend. Your
   - a vertical **Z‑layer range slider** to peel layers;
   - line ↔ solid (world‑unit tube) toggle and always‑on travel‑move hairlines;
   - **multiple models** on one build plate — each selectable, draggable on the XY plane, and scalable.
-- **Subtractive (CNC) view** — a true **3‑axis height‑map material‑removal simulation**: a stock block is carved into the real machined surface (flat / ball / V‑bit tools), with an **operation scrubber** and a progress bar. The stock bounds are editable both from the panel sliders and by **dragging the stock's faces directly in the 3D view**, and the workpiece colour is configurable.
+- **Subtractive (CNC) view** — a true **3‑axis height‑map material‑removal simulation**: a stock block is carved into the real machined surface (flat / ball / V‑bit tools), with an **operation scrubber** and a recompute progress indicator. The stock starts as a 100 × 100 × 10 mm block that auto‑fits a loaded file's extremities, and its bounds are edited by **dragging the double‑ended arrow handles on each face directly in the 3D view** (live dimensions shown in the info panel); cuts that reach the bottom open a real **cut‑through**. The handles can be hidden, and the workpiece colour is configurable.
 - **Shared Z‑up scene** — one camera, grid, axes, view‑cube gizmo, fit‑to‑frame, and an FPS overlay across both modes.
 
 ## Stack

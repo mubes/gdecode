@@ -55,10 +55,7 @@ export interface AppState {
   opIndex: number;
   /** Colour of the carved stock/workpiece material. */
   stockColor: string;
-  /** Bumped when stock is edited by dragging in the 3D view, so the leva
-   *  stock sliders re-seed once (on drag end) without rebuilding mid-drag. */
-  stockEditNonce: number;
-  /** True once the user has changed the stock manually (sliders or 3D drag).
+  /** True once the user has changed the stock manually (3D face drag).
    *  While false, loading a file auto-fits the stock to the work extremities. */
   stockUserEdited: boolean;
   /** Show the draggable stock-bounds box + handles in the subtractive view. */
@@ -102,7 +99,6 @@ export interface AppState {
   setTool: (t: ToolDef) => void;
   setOpIndex: (n: number) => void;
   setStockColor: (c: string) => void;
-  bumpStockEdit: () => void;
   setShowStockEditor: (v: boolean) => void;
   setShowGrid: (v: boolean) => void;
   setShowAxes: (v: boolean) => void;
@@ -162,7 +158,6 @@ export const useStore = create<AppState>((set, get) => ({
   tool: DEFAULT_TOOL,
   opIndex: -1,
   stockColor: '#b8b8c0',
-  stockEditNonce: 0,
   stockUserEdited: false,
   showStockEditor: true,
 
@@ -248,7 +243,6 @@ export const useStore = create<AppState>((set, get) => ({
   setTool: (tool) => set({ tool }),
   setOpIndex: (opIndex) => set({ opIndex }),
   setStockColor: (stockColor) => set({ stockColor }),
-  bumpStockEdit: () => set((s) => ({ stockEditNonce: s.stockEditNonce + 1 })),
   setShowStockEditor: (showStockEditor) => set({ showStockEditor }),
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowAxes: (showAxes) => set({ showAxes }),

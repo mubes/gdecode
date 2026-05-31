@@ -30,35 +30,47 @@ import type { HeightFieldPayload, StockDef } from '../types.ts';
 
 /**
  * Build a solid BufferGeometry from a carved height field: a displaced top
- * surface (nx × ny grid of vertices) plus skirt walls and a bottom face.
+ * surface (nx × ny grid of vertices), a bottom face, and skirt walls.
+ *
+ * Where a cut reaches the stock bottom the cell is "through": its top and
+ * bottom quads are omitted so the workpiece is open there (a real cut-through),
+ * rather than leaving a zero-thickness floor. The sloped top of the bordering
+ * cells forms the walls of the opening.
  */
 function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
   const { heights, nx, ny, origin, sizeX, sizeY, stockBottomZ } = hf;
   const [ox, oy] = origin;
   const dx = sizeX / nx;
   const dy = sizeY / ny;
+  const bz = stockBottomZ;
 
-  // Vertex world position for the CENTER of cell (ix,iy) on the top surface.
-  // (Matches carve.ts cell-center sampling.)
+  // A cell whose four corners all reach the bottom is fully cut through.
+  const EPS = 1e-3;
+  const topZ = (ix: number, iy: number) => heights[iy * nx + ix];
+  const throughQuad = (ix: number, iy: number): boolean =>
+    topZ(ix, iy) <= bz + EPS &&
+    topZ(ix + 1, iy) <= bz + EPS &&
+    topZ(ix, iy + 1) <= bz + EPS &&
+    topZ(ix + 1, iy + 1) <= bz + EPS;
 
-  // --- TOP SURFACE: (nx-1)*(ny-1) quads -> 2 tris each ---
   const topQuadsX = nx - 1;
   const topQuadsY = ny - 1;
-  const topTris = topQuadsX * topQuadsY * 2;
 
-  // --- SKIRT: 4 edges. Each edge has (n-1) quads -> 2 tris. ---
-  const skirtTris = 2 * (topQuadsX * 2) + 2 * (topQuadsY * 2);
+  // Pass 1 — count solid quads (top + bottom skip the through ones equally).
+  let solidQuads = 0;
+  for (let iy = 0; iy < topQuadsY; iy++) {
+    for (let ix = 0; ix < topQuadsX; ix++) {
+      if (!throughQuad(ix, iy)) solidQuads++;
+    }
+  }
 
-  // --- BOTTOM: 2 tris. ---
-  const bottomTris = 2;
-
-  const totalTris = topTris + skirtTris + bottomTris;
+  const skirtTris = 2 * (topQuadsX * 2) + 2 * (topQuadsY * 2); // 4 outer edges
+  const totalTris = solidQuads * 2 /* top */ + solidQuads * 2 /* bottom */ + skirtTris;
   const positions = new Float32Array(totalTris * 3 * 3);
 
   let p = 0;
   const px = (ix: number) => ox + (ix + 0.5) * dx;
   const py = (iy: number) => oy + (iy + 0.5) * dy;
-  const topZ = (ix: number, iy: number) => heights[iy * nx + ix];
 
   const pushV = (x: number, y: number, z: number) => {
     positions[p++] = x;
@@ -67,17 +79,18 @@ function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
   };
   const tri = (
     ax: number, ay: number, az: number,
-    bx: number, by: number, bz: number,
+    bx: number, by: number, bz2: number,
     cx: number, cy: number, cz: number,
   ) => {
     pushV(ax, ay, az);
-    pushV(bx, by, bz);
+    pushV(bx, by, bz2);
     pushV(cx, cy, cz);
   };
 
-  // Top surface (CCW seen from +Z so normals point up after computeVertexNormals).
+  // Pass 2 — top surface (skip through cells; normals up after recompute).
   for (let iy = 0; iy < topQuadsY; iy++) {
     for (let ix = 0; ix < topQuadsX; ix++) {
+      if (throughQuad(ix, iy)) continue;
       const x0 = px(ix), x1 = px(ix + 1);
       const y0 = py(iy), y1 = py(iy + 1);
       const z00 = topZ(ix, iy);
@@ -89,14 +102,22 @@ function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
     }
   }
 
-  const bz = stockBottomZ;
+  // Bottom face — per solid cell (skip through cells so holes are open below).
+  for (let iy = 0; iy < topQuadsY; iy++) {
+    for (let ix = 0; ix < topQuadsX; ix++) {
+      if (throughQuad(ix, iy)) continue;
+      const x0 = px(ix), x1 = px(ix + 1);
+      const y0 = py(iy), y1 = py(iy + 1);
+      tri(x0, y0, bz, x1, y1, bz, x1, y0, bz);
+      tri(x0, y0, bz, x0, y1, bz, x1, y1, bz);
+    }
+  }
 
   // Skirt edge helper: given two adjacent top vertices, drop a wall to bottom.
   const wall = (
     ax: number, ay: number, az: number,
     bx: number, by: number, bz2: number,
   ) => {
-    // outward-facing quad (a_top, b_top, b_bot, a_bot)
     tri(ax, ay, az, bx, by, bz2, bx, by, bz);
     tri(ax, ay, az, bx, by, bz, ax, ay, bz);
   };
@@ -116,14 +137,6 @@ function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
   // +X edge (ix=nx-1)
   for (let iy = 0; iy < topQuadsY; iy++) {
     wall(px(nx - 1), py(iy + 1), topZ(nx - 1, iy + 1), px(nx - 1), py(iy), topZ(nx - 1, iy));
-  }
-
-  // Bottom face (CCW seen from -Z -> normals point down).
-  {
-    const x0 = px(0), x1 = px(nx - 1);
-    const y0 = py(0), y1 = py(ny - 1);
-    tri(x0, y0, bz, x1, y1, bz, x1, y0, bz);
-    tri(x0, y0, bz, x0, y1, bz, x1, y1, bz);
   }
 
   const geom = new THREE.BufferGeometry();
@@ -195,7 +208,6 @@ function resizeStock(s: StockDef, axis: 0 | 1 | 2, side: 'min' | 'max', coord: n
 function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
   const { camera, gl, raycaster, controls } = useThree();
   const editStock = useStore((s) => s.editStock);
-  const bumpStockEdit = useStore((s) => s.bumpStockEdit);
 
   const drag = useRef<{ axis: 0 | 1 | 2; side: 'min' | 'max' } | null>(null);
 
@@ -264,7 +276,6 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       if (!drag.current) return;
       drag.current = null;
       if (controls) (controls as { enabled?: boolean }).enabled = true;
-      bumpStockEdit(); // re-seed the leva sliders once, after the drag
     };
 
     window.addEventListener('pointermove', onMove);
@@ -273,7 +284,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [camera, gl, raycaster, controls, editStock, bumpStockEdit]);
+  }, [camera, gl, raycaster, controls, editStock]);
 
   const onGrab = (axis: 0 | 1 | 2, side: 'min' | 'max') => (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -327,15 +338,15 @@ function FaceArrow({
     <group position={position} quaternion={AXIS_QUAT[axis]} onPointerDown={onPointerDown}>
       <mesh>
         <cylinderGeometry args={[shaftR, shaftR, shaftLen, 12]} />
-        <meshStandardMaterial color={color} depthTest={false} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
       </mesh>
       <mesh position={[0, tip, 0]}>
         <coneGeometry args={[coneR, coneH, 16]} />
-        <meshStandardMaterial color={color} depthTest={false} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
       </mesh>
       <mesh position={[0, -tip, 0]} rotation={[Math.PI, 0, 0]}>
         <coneGeometry args={[coneR, coneH, 16]} />
-        <meshStandardMaterial color={color} depthTest={false} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
       </mesh>
     </group>
   );

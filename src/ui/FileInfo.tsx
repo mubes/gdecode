@@ -103,6 +103,8 @@ export function FileInfo() {
 
 function Details({ mode }: { mode: string }) {
   const doc = useStore(activeDoc);
+  // Live stock dimensions (updated as the face arrows are dragged in the view).
+  const stock = useStore((s) => s.stock);
   if (!doc) return null;
   const { bbox, units, moves, meta } = doc;
   const rows: [string, string][] = [
@@ -119,6 +121,17 @@ function Details({ mode }: { mode: string }) {
   if (meta.layerCount !== undefined) rows.push(['Layers', meta.layerCount.toLocaleString()]);
   if (meta.tools && meta.tools.length) rows.push(['Tools', meta.tools.join(', ')]);
   if (meta.generator) rows.push(['Generator', meta.generator]);
+
+  if (mode === 'subtractive' && stock) {
+    const [ox, oy, oz] = stock.origin;
+    rows.push([
+      'Stock',
+      `${fmt(stock.sizeX)} × ${fmt(stock.sizeY)} × ${fmt(stock.sizeZ)} ${units}`,
+    ]);
+    rows.push(['Stock X', `${fmt(ox)} … ${fmt(ox + stock.sizeX)}`]);
+    rows.push(['Stock Y', `${fmt(oy)} … ${fmt(oy + stock.sizeY)}`]);
+    rows.push(['Stock Z', `${fmt(oz)} … ${fmt(oz + stock.sizeZ)}`]);
+  }
 
   return (
     <table style={{ borderCollapse: 'collapse', width: '100%' }}>
