@@ -248,7 +248,13 @@ export function ControlPanel() {
     [isAdditive, isSubtractive, detectedMode, modeOverride, moveCount, selectedId],
   );
 
-  return <Leva collapsed={false} />;
+  // Wider panel + a roomier label column so toggle labels aren't truncated.
+  return (
+    <Leva
+      collapsed={false}
+      theme={{ sizes: { rootWidth: '340px', controlWidth: '150px' } }}
+    />
+  );
 }
 
 // --- helpers ---------------------------------------------------------------

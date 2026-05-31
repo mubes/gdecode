@@ -31,9 +31,11 @@ export const DEFAULT_MIN: StockMin = { x: 100, y: 100, z: 10 };
  *
  * - XY: bbox expanded by `margin` on every side, then grown (symmetrically) to
  *       at least `min.x` / `min.y`.
- * - Z : top = bbox.max.z (material surface), bottom = bbox.min.z (deepest cut).
- *       A ~zero span falls back to `DEFAULT_THICKNESS`; the block is then grown
- *       DOWNWARD to at least `min.z` so the top stays at the material surface.
+ * - Z : top = bbox.max.z (material surface), bottom = `margin` BELOW the
+ *       deepest cut so a pocket keeps a floor by default (lower the stock-bottom
+ *       arrow past a cut to open it through). A ~zero span falls back to
+ *       `DEFAULT_THICKNESS`; the block is then grown DOWNWARD to at least
+ *       `min.z`, keeping the top at the material surface.
  *
  * With the default `min` of {0,0,0} this is a tight fit to the toolpath; the app
  * passes `DEFAULT_MIN` so the block never starts smaller than 100 × 100 × 10.
@@ -66,7 +68,9 @@ export function computeDefaultStock(
   }
 
   const topZ = maxZ;
-  let bottomZ = minZ;
+  // Leave a `margin` floor below the deepest cut (so a default pocket is not
+  // already cut through).
+  let bottomZ = minZ - m;
   // Degenerate / inverted Z range → give the block a real thickness below top.
   if (!(topZ - bottomZ > 1e-6)) {
     bottomZ = topZ - DEFAULT_THICKNESS;

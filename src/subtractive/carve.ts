@@ -112,8 +112,9 @@ export function carveHeightField(
   // tip Z = tipZ. Lowers H to surfaceZ = tipZ + bottomOffset(r) inside radius.
   const stamp = (px: number, py: number, tipZ: number) => {
     if (tipZ >= stockTopZ) return; // never above the surface — nothing to do
-    // Clamp tip to the stock bottom (can't cut below the block).
-    const tip = tipZ < stockBottomZ ? stockBottomZ : tipZ;
+    // NB: the tip is NOT clamped to the stock bottom. A cut deeper than the
+    // block drives H below stockBottomZ; the mesh builder treats those cells as
+    // cut THROUGH (an open hole) rather than a zero-thickness floor.
 
     // Footprint bbox in cell indices.
     const minCx = Math.floor((px - R - ox) / dx);
@@ -140,7 +141,7 @@ export function carveHeightField(
         if (r2 > R2) continue;
         const off = profile.bottomOffset(Math.sqrt(r2));
         if (off === Infinity) continue;
-        const surfaceZ = tip + off;
+        const surfaceZ = tipZ + off;
         const idx = rowBase + ix;
         if (surfaceZ < heights[idx]) heights[idx] = surfaceZ;
       }

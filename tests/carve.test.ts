@@ -30,15 +30,16 @@ describe('toolProfile', () => {
 });
 
 describe('computeDefaultStock', () => {
-  it('expands XY by margin and spans Z range', () => {
+  it('expands XY by margin, leaves a margin floor below the deepest cut', () => {
     const s = computeDefaultStock(
       { min: [0, 0, -5], max: [10, 20, 0] },
       1,
     );
-    expect(s.origin).toEqual([-1, -1, -5]);
+    // Top stays at the surface (max Z); bottom sits `margin` below the cut.
+    expect(s.origin).toEqual([-1, -1, -6]);
     expect(s.sizeX).toBe(12);
     expect(s.sizeY).toBe(22);
-    expect(s.sizeZ).toBe(5);
+    expect(s.sizeZ).toBe(6); // 0 − (−6)
   });
 
   it('uses fallback thickness for flat Z range', () => {
@@ -64,7 +65,7 @@ describe('computeDefaultStock', () => {
     const s = computeDefaultStock({ min: [0, 0, -30], max: [200, 50, 0] }, 2, DEFAULT_MIN);
     expect(s.sizeX).toBe(204); // 200 + 2*margin, already > 100
     expect(s.sizeY).toBe(100); // 54 < 100 → floored
-    expect(s.sizeZ).toBe(30); // 30 > 10 → kept
+    expect(s.sizeZ).toBe(32); // 0 − (−30 − 2 margin floor) = 32
   });
 });
 
@@ -99,6 +100,17 @@ describe('carveHeightField', () => {
 
     // A corner cell far from the path stays at the top.
     expect(hf.heights[0]).toBe(0);
+  });
+
+  it('cuts BELOW the stock bottom (no clamp) so through-holes can form', () => {
+    // Stock bottom is -5; a cut to -8 must drive H below the bottom, marking
+    // those cells as cut-through for the mesh builder (not clamped to -5).
+    const moves: Move[] = [{ type: 'cut', start: [1, 5, -8], end: [9, 5, -8], lineNo: 1 }];
+    const hf = carveHeightField(moves, stock, flat, 100, -1);
+    const cx = Math.floor((5 - hf.origin[0]) / (hf.sizeX / hf.nx));
+    const cy = Math.floor((5 - hf.origin[1]) / (hf.sizeY / hf.ny));
+    expect(hf.heights[cy * hf.nx + cx]).toBeCloseTo(-8, 1);
+    expect(hf.heights[cy * hf.nx + cx]).toBeLessThan(hf.stockBottomZ);
   });
 
   it('respects opIndex scrubbing', () => {

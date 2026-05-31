@@ -28,14 +28,21 @@ import type { HeightFieldPayload, StockDef } from '../types.ts';
 
 // --- mesh construction -------------------------------------------------------
 
+/** Cap the DISPLAY mesh resolution (the carve grid can be finer). A 2048² grid
+ *  meshed 1:1 is ~17M triangles / ~600MB — it OOMs the GPU/JS heap. We sample
+ *  the height field down to at most this many cells per axis for the mesh; the
+ *  carve itself stays full resolution. */
+const MAX_MESH_DIM = 1024;
+
 /**
- * Build a solid BufferGeometry from a carved height field: a displaced top
- * surface (nx × ny grid of vertices), a bottom face, and skirt walls.
+ * Build a solid, indexed BufferGeometry from a carved height field: a displaced
+ * top surface, a matching bottom face, and skirt walls. Vertices are shared
+ * (indexed) so the mesh stays light even at high grid resolutions.
  *
- * Where a cut reaches the stock bottom the cell is "through": its top and
- * bottom quads are omitted so the workpiece is open there (a real cut-through),
- * rather than leaving a zero-thickness floor. The sloped top of the bordering
- * cells forms the walls of the opening.
+ * A cell whose cut went BELOW the stock bottom is "through": its top and bottom
+ * quads are omitted so the workpiece is open there (a real cut-through). The
+ * sloped top of bordering cells forms the walls of the opening. A pocket that
+ * merely reaches the bottom keeps a (thin) floor — it is not a hole.
  */
 function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
   const { heights, nx, ny, origin, sizeX, sizeY, stockBottomZ } = hf;
@@ -43,104 +50,102 @@ function buildSolidGeometry(hf: HeightFieldPayload): THREE.BufferGeometry {
   const dx = sizeX / nx;
   const dy = sizeY / ny;
   const bz = stockBottomZ;
-
-  // A cell whose four corners all reach the bottom is fully cut through.
   const EPS = 1e-3;
-  const topZ = (ix: number, iy: number) => heights[iy * nx + ix];
-  const throughQuad = (ix: number, iy: number): boolean =>
-    topZ(ix, iy) <= bz + EPS &&
-    topZ(ix + 1, iy) <= bz + EPS &&
-    topZ(ix, iy + 1) <= bz + EPS &&
-    topZ(ix + 1, iy + 1) <= bz + EPS;
 
-  const topQuadsX = nx - 1;
-  const topQuadsY = ny - 1;
+  // Decimate the mesh grid (not the carve) to keep memory bounded.
+  const stride = Math.max(1, Math.ceil(Math.max(nx, ny) / MAX_MESH_DIM));
+  const sampleAxis = (n: number): number[] => {
+    const a: number[] = [];
+    for (let i = 0; i < n; i += stride) a.push(i);
+    if (a[a.length - 1] !== n - 1) a.push(n - 1);
+    return a;
+  };
+  const gx = sampleAxis(nx);
+  const gy = sampleAxis(ny);
+  const mx = gx.length;
+  const my = gy.length;
 
-  // Pass 1 — count solid quads (top + bottom skip the through ones equally).
+  const wx = (gi: number) => ox + (gx[gi] + 0.5) * dx;
+  const wy = (gj: number) => oy + (gy[gj] + 0.5) * dy;
+  const H = (gi: number, gj: number) => heights[gy[gj] * nx + gx[gi]];
+  // A cut that drove the surface below the stock bottom = open material.
+  const through = (gi: number, gj: number) => H(gi, gj) < bz - EPS;
+  const throughQuad = (gi: number, gj: number) =>
+    through(gi, gj) && through(gi + 1, gj) && through(gi, gj + 1) && through(gi + 1, gj + 1);
+
+  // Count solid quads (top + bottom each skip the fully-through ones).
   let solidQuads = 0;
-  for (let iy = 0; iy < topQuadsY; iy++) {
-    for (let ix = 0; ix < topQuadsX; ix++) {
-      if (!throughQuad(ix, iy)) solidQuads++;
+  for (let gj = 0; gj < my - 1; gj++) {
+    for (let gi = 0; gi < mx - 1; gi++) {
+      if (!throughQuad(gi, gj)) solidQuads++;
     }
   }
 
-  const skirtTris = 2 * (topQuadsX * 2) + 2 * (topQuadsY * 2); // 4 outer edges
-  const totalTris = solidQuads * 2 /* top */ + solidQuads * 2 /* bottom */ + skirtTris;
-  const positions = new Float32Array(totalTris * 3 * 3);
+  const skirtTris = 2 * (mx - 1) * 2 + 2 * (my - 1) * 2; // 4 outer edges
+  const triCount = solidQuads * 2 /* top */ + solidQuads * 2 /* bottom */ + skirtTris;
 
+  // Vertices: a top block [0, mx*my) then a bottom block, both row-major.
+  const vCount = mx * my * 2;
+  const positions = new Float32Array(vCount * 3);
   let p = 0;
-  const px = (ix: number) => ox + (ix + 0.5) * dx;
-  const py = (iy: number) => oy + (iy + 0.5) * dy;
-
-  const pushV = (x: number, y: number, z: number) => {
-    positions[p++] = x;
-    positions[p++] = y;
-    positions[p++] = z;
-  };
-  const tri = (
-    ax: number, ay: number, az: number,
-    bx: number, by: number, bz2: number,
-    cx: number, cy: number, cz: number,
-  ) => {
-    pushV(ax, ay, az);
-    pushV(bx, by, bz2);
-    pushV(cx, cy, cz);
-  };
-
-  // Pass 2 — top surface (skip through cells; normals up after recompute).
-  for (let iy = 0; iy < topQuadsY; iy++) {
-    for (let ix = 0; ix < topQuadsX; ix++) {
-      if (throughQuad(ix, iy)) continue;
-      const x0 = px(ix), x1 = px(ix + 1);
-      const y0 = py(iy), y1 = py(iy + 1);
-      const z00 = topZ(ix, iy);
-      const z10 = topZ(ix + 1, iy);
-      const z01 = topZ(ix, iy + 1);
-      const z11 = topZ(ix + 1, iy + 1);
-      tri(x0, y0, z00, x1, y0, z10, x1, y1, z11);
-      tri(x0, y0, z00, x1, y1, z11, x0, y1, z01);
+  for (let gj = 0; gj < my; gj++) {
+    for (let gi = 0; gi < mx; gi++) {
+      const h = H(gi, gj);
+      positions[p++] = wx(gi);
+      positions[p++] = wy(gj);
+      positions[p++] = h > bz ? h : bz; // clamp display floor to the bottom
+    }
+  }
+  for (let gj = 0; gj < my; gj++) {
+    for (let gi = 0; gi < mx; gi++) {
+      positions[p++] = wx(gi);
+      positions[p++] = wy(gj);
+      positions[p++] = bz;
     }
   }
 
-  // Bottom face — per solid cell (skip through cells so holes are open below).
-  for (let iy = 0; iy < topQuadsY; iy++) {
-    for (let ix = 0; ix < topQuadsX; ix++) {
-      if (throughQuad(ix, iy)) continue;
-      const x0 = px(ix), x1 = px(ix + 1);
-      const y0 = py(iy), y1 = py(iy + 1);
-      tri(x0, y0, bz, x1, y1, bz, x1, y0, bz);
-      tri(x0, y0, bz, x0, y1, bz, x1, y1, bz);
-    }
-  }
-
-  // Skirt edge helper: given two adjacent top vertices, drop a wall to bottom.
-  const wall = (
-    ax: number, ay: number, az: number,
-    bx: number, by: number, bz2: number,
-  ) => {
-    tri(ax, ay, az, bx, by, bz2, bx, by, bz);
-    tri(ax, ay, az, bx, by, bz, ax, ay, bz);
+  const index = new Uint32Array(triCount * 3);
+  let q = 0;
+  const topV = (gi: number, gj: number) => gj * mx + gi;
+  const botV = (gi: number, gj: number) => mx * my + gj * mx + gi;
+  const pushTri = (a: number, b: number, c: number) => {
+    index[q++] = a;
+    index[q++] = b;
+    index[q++] = c;
   };
 
-  // -Y edge (iy=0)
-  for (let ix = 0; ix < topQuadsX; ix++) {
-    wall(px(ix + 1), py(0), topZ(ix + 1, 0), px(ix), py(0), topZ(ix, 0));
+  // Top surface (normals up). a=(gi,gj) b=(gi+1,gj) c=(gi+1,gj+1) d=(gi,gj+1).
+  for (let gj = 0; gj < my - 1; gj++) {
+    for (let gi = 0; gi < mx - 1; gi++) {
+      if (throughQuad(gi, gj)) continue;
+      const a = topV(gi, gj), b = topV(gi + 1, gj), c = topV(gi + 1, gj + 1), d = topV(gi, gj + 1);
+      pushTri(a, b, c);
+      pushTri(a, c, d);
+    }
   }
-  // +Y edge (iy=ny-1)
-  for (let ix = 0; ix < topQuadsX; ix++) {
-    wall(px(ix), py(ny - 1), topZ(ix, ny - 1), px(ix + 1), py(ny - 1), topZ(ix + 1, ny - 1));
+  // Bottom face (normals down → reversed winding).
+  for (let gj = 0; gj < my - 1; gj++) {
+    for (let gi = 0; gi < mx - 1; gi++) {
+      if (throughQuad(gi, gj)) continue;
+      const a = botV(gi, gj), b = botV(gi + 1, gj), c = botV(gi + 1, gj + 1), d = botV(gi, gj + 1);
+      pushTri(a, c, b);
+      pushTri(a, d, c);
+    }
   }
-  // -X edge (ix=0)
-  for (let iy = 0; iy < topQuadsY; iy++) {
-    wall(px(0), py(iy), topZ(0, iy), px(0), py(iy + 1), topZ(0, iy + 1));
-  }
-  // +X edge (ix=nx-1)
-  for (let iy = 0; iy < topQuadsY; iy++) {
-    wall(px(nx - 1), py(iy + 1), topZ(nx - 1, iy + 1), px(nx - 1), py(iy), topZ(nx - 1, iy));
-  }
+  // Skirt: outward-facing walls from each top edge vertex down to the bottom.
+  const wall = (aGi: number, aGj: number, bGi: number, bGj: number) => {
+    const aT = topV(aGi, aGj), bT = topV(bGi, bGj), aB = botV(aGi, aGj), bB = botV(bGi, bGj);
+    pushTri(aT, bT, bB);
+    pushTri(aT, bB, aB);
+  };
+  for (let gi = 0; gi < mx - 1; gi++) wall(gi + 1, 0, gi, 0); // -Y
+  for (let gi = 0; gi < mx - 1; gi++) wall(gi, my - 1, gi + 1, my - 1); // +Y
+  for (let gj = 0; gj < my - 1; gj++) wall(0, gj, 0, gj + 1); // -X
+  for (let gj = 0; gj < my - 1; gj++) wall(mx - 1, gj + 1, mx - 1, gj); // +X
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setIndex(new THREE.BufferAttribute(index, 1));
   geom.computeVertexNormals();
   geom.computeBoundingBox();
   geom.computeBoundingSphere();
@@ -165,10 +170,10 @@ const AXIS_DIR = [
   new THREE.Vector3(0, 0, 1),
 ];
 
-// Orientation for the arrow handles: built along local +Y, rotated so +Y maps
-// onto each drag axis. (Y→Y is identity.)
+// Arrow handles are built along local +Y and rotated so +Y points OUTWARD from
+// the face they sit on (the expansion direction). Dragging inward to shrink is
+// left to the user — only the outward (expansion) arrow is drawn.
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
-const AXIS_QUAT = AXIS_DIR.map((d) => new THREE.Quaternion().setFromUnitVectors(Y_AXIS, d));
 
 /** Minimum stock extent (mm) along any axis — handles can't cross past this. */
 const MIN_EXTENT = 0.5;
@@ -299,7 +304,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
         <FaceArrow
           key={`${axis}-${side}`}
           position={faceCenter(axis, side)}
-          axis={axis}
+          dir={AXIS_DIR[axis].clone().multiplyScalar(side === 'max' ? 1 : -1)}
           size={arrowSize}
           color={hc}
           onPointerDown={onGrab(axis, side)}
@@ -310,41 +315,37 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
 }
 
 /**
- * A double-ended arrow handle, centred on a stock face and pointing along that
- * face's drag axis (so it reads as "slide this face in or out"). Built along
- * local +Y from a thin shaft and two end cones, then rotated onto the axis. The
- * tips sit exactly at ±size/2 from the face centre, aligned with the axis.
+ * A single arrow handle whose tail sits at the face centre and points OUTWARD
+ * (the expansion direction). Built along local +Y (shaft + cone), then rotated
+ * so +Y maps onto `dir`. Dragging it either way resizes the face; only the
+ * outward (expansion) arrow is shown — the inward one is left to inference.
  */
 function FaceArrow({
   position,
-  axis,
+  dir,
   size,
   color,
   onPointerDown,
 }: {
   position: THREE.Vector3;
-  axis: 0 | 1 | 2;
+  dir: THREE.Vector3;
   size: number;
   color: string;
   onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
 }) {
-  const coneH = size * 0.3;
-  const coneR = size * 0.13;
-  const shaftR = size * 0.04;
-  const shaftLen = Math.max(size - 2 * coneH, size * 0.1);
-  const tip = shaftLen / 2 + coneH / 2; // centre offset of each cone
+  const quat = new THREE.Quaternion().setFromUnitVectors(Y_AXIS, dir);
+  const coneH = size * 0.4;
+  const coneR = size * 0.16;
+  const shaftR = size * 0.05;
+  const shaftLen = Math.max(size - coneH, size * 0.3);
 
   return (
-    <group position={position} quaternion={AXIS_QUAT[axis]} onPointerDown={onPointerDown}>
-      <mesh>
+    <group position={position} quaternion={quat} onPointerDown={onPointerDown}>
+      <mesh position={[0, shaftLen / 2, 0]}>
         <cylinderGeometry args={[shaftR, shaftR, shaftLen, 12]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
       </mesh>
-      <mesh position={[0, tip, 0]}>
-        <coneGeometry args={[coneR, coneH, 16]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
-      </mesh>
-      <mesh position={[0, -tip, 0]} rotation={[Math.PI, 0, 0]}>
+      <mesh position={[0, shaftLen + coneH / 2, 0]}>
         <coneGeometry args={[coneR, coneH, 16]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.35} />
       </mesh>
