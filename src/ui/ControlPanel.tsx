@@ -33,7 +33,6 @@ export function ControlPanel() {
   const extrusionWidth = useStore((s) => s.extrusionWidth);
   const gridRes = useStore((s) => s.gridRes);
   const tool = useStore((s) => s.tool);
-  const stockColor = useStore((s) => s.stockColor);
   const showStockEditor = useStore((s) => s.showStockEditor);
   const showGrid = useStore((s) => s.showGrid);
   const showAxes = useStore((s) => s.showAxes);
@@ -143,15 +142,9 @@ export function ControlPanel() {
             },
           },
           // Stock bounds are edited by dragging the face arrows in the 3D view
-          // (the live dimensions show in the file-info panel). No sliders here.
-          stockColor: {
-            label: 'stock color',
-            value: stockColor,
-            onChange: (v: string, _p, { initial }) => {
-              if (initial) return;
-              useStore.getState().setStockColor(v);
-            },
-          },
+          // (the live dimensions show in the file-info panel). The stock colour
+          // is a native colour well in that same panel — leva's colour control
+          // can't hide its hex readout. No sliders here.
           editHandles: {
             label: 'edit handles',
             value: showStockEditor,

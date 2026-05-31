@@ -5,6 +5,7 @@
 
 import { useStore, activeDoc } from '../store';
 import { gradient, TOOL_PALETTE_HEX } from '../additive/buildGeometry';
+import { ColorWell } from './ColorWell';
 
 function gradientCss(): string {
   const stops: string[] = [];
@@ -112,48 +113,6 @@ function Swatch({ color, label }: { color: string; label: string }) {
       <span style={{ width: 11, height: 11, borderRadius: 3, background: color, display: 'inline-block' }} />
       {label}
     </span>
-  );
-}
-
-/** An editable colour swatch backed by a native <input type="color"> — shows
- *  only the swatch (no hex). pointerEvents is re-enabled here since the legend
- *  container disables them. */
-function ColorWell({
-  color,
-  label,
-  onChange,
-}: {
-  color: string;
-  label: string;
-  onChange: (c: string) => void;
-}) {
-  return (
-    <label
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        pointerEvents: 'auto',
-        cursor: 'pointer',
-      }}
-      title={`${label} filament colour`}
-    >
-      <input
-        type="color"
-        value={color}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          width: 16,
-          height: 16,
-          padding: 0,
-          border: '1px solid #555',
-          borderRadius: 3,
-          background: 'none',
-          cursor: 'pointer',
-        }}
-      />
-      {label}
-    </label>
   );
 }
 

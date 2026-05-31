@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore, activeDoc } from '../store';
+import { ColorWell } from './ColorWell';
 
 /** Quiet period (ms) after the last scrub before the carve is kicked off. */
 const DEBOUNCE_MS = 200;
@@ -21,6 +22,8 @@ export function OpScrubber() {
   const mode = useStore((s) => s.effectiveMode());
   const opIndex = useStore((s) => s.activeOpIndex());
   const doc = useStore(activeDoc);
+  const stockColor = useStore((s) => s.stockColor);
+  const setStockColor = useStore((s) => s.setStockColor);
   const total = doc?.moves.length ?? 0;
 
   const [live, setLive] = useState(opIndex);
@@ -75,6 +78,11 @@ export function OpScrubber() {
       <span style={{ minWidth: 70, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
         {label}
       </span>
+
+      {/* Divider + stock colour well (the subtractive analogue of the additive
+          filament wells in the legend). */}
+      <span style={{ width: 1, alignSelf: 'stretch', background: '#3a3a44' }} />
+      <ColorWell color={stockColor} label="stock" onChange={setStockColor} />
     </div>
   );
 }
