@@ -5,6 +5,7 @@ import { ControlPanel } from './ui/ControlPanel';
 import { LayerSlider } from './ui/LayerSlider';
 import { StatsOverlay } from './ui/StatsOverlay';
 import { ColorLegend } from './ui/ColorLegend';
+import { CarveIndicator } from './ui/CarveIndicator';
 import { AdditiveModels } from './additive/AdditiveModel';
 import { SubtractiveModel } from './subtractive/SubtractiveModel';
 
@@ -24,6 +25,7 @@ export default function App() {
       <LayerSlider />
       <StatsOverlay />
       <ColorLegend />
+      <CarveIndicator />
       <DropZone />
     </div>
   );

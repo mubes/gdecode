@@ -42,6 +42,7 @@ export function ControlPanel() {
   const stock = useStore((s) => s.stock);
   const stockColor = useStore((s) => s.stockColor);
   const stockEditNonce = useStore((s) => s.stockEditNonce);
+  const showStockEditor = useStore((s) => s.showStockEditor);
   const showGrid = useStore((s) => s.showGrid);
   const showAxes = useStore((s) => s.showAxes);
   const showStats = useStore((s) => s.showStats);
@@ -83,7 +84,8 @@ export function ControlPanel() {
     if (axis === 0) size.sizeX = max - min;
     if (axis === 1) size.sizeY = max - min;
     if (axis === 2) size.sizeZ = max - min;
-    useStore.getState().setStock({ origin, ...size });
+    // A slider change is a deliberate user edit (stops load-time auto-fitting).
+    useStore.getState().editStock({ origin, ...size });
   };
 
   useControls(
@@ -247,6 +249,14 @@ export function ControlPanel() {
             onChange: (v: string, _p, { initial }) => {
               if (initial) return;
               useStore.getState().setStockColor(v);
+            },
+          },
+          editHandles: {
+            label: 'edit handles',
+            value: showStockEditor,
+            onChange: (v: boolean, _p, { initial }) => {
+              if (initial) return;
+              useStore.getState().setShowStockEditor(v);
             },
           },
         });

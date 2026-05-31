@@ -58,6 +58,11 @@ export interface AppState {
   /** Bumped when stock is edited by dragging in the 3D view, so the leva
    *  stock sliders re-seed once (on drag end) without rebuilding mid-drag. */
   stockEditNonce: number;
+  /** True once the user has changed the stock manually (sliders or 3D drag).
+   *  While false, loading a file auto-fits the stock to the work extremities. */
+  stockUserEdited: boolean;
+  /** Show the draggable stock-bounds box + handles in the subtractive view. */
+  showStockEditor: boolean;
 
   // --- scene/view ---
   showGrid: boolean;
@@ -91,11 +96,14 @@ export interface AppState {
   setExtrusionWidth: (v: number) => void;
   setFilamentColor: (c: string) => void;
   setStock: (s: StockDef | null) => void;
+  /** Set stock as a deliberate USER edit (marks stockUserEdited). */
+  editStock: (s: StockDef) => void;
   setGridRes: (n: number) => void;
   setTool: (t: ToolDef) => void;
   setOpIndex: (n: number) => void;
   setStockColor: (c: string) => void;
   bumpStockEdit: () => void;
+  setShowStockEditor: (v: boolean) => void;
   setShowGrid: (v: boolean) => void;
   setShowAxes: (v: boolean) => void;
   setShowStats: (v: boolean) => void;
@@ -155,6 +163,8 @@ export const useStore = create<AppState>((set, get) => ({
   opIndex: -1,
   stockColor: '#b8b8c0',
   stockEditNonce: 0,
+  stockUserEdited: false,
+  showStockEditor: true,
 
   showGrid: true,
   showAxes: true,
@@ -190,7 +200,9 @@ export const useStore = create<AppState>((set, get) => ({
         layerRange: [0, maxLayer],
         opIndex: -1,
         modeOverride: null,
-        stock: null,
+        // Auto-fit the stock to the new file's extremities unless the user has
+        // dialled in their own block (then keep it).
+        stock: s.stockUserEdited ? s.stock : null,
         fitRequest: s.fitRequest + 1,
       };
     }),
@@ -231,11 +243,13 @@ export const useStore = create<AppState>((set, get) => ({
   setExtrusionWidth: (extrusionWidth) => set({ extrusionWidth }),
   setFilamentColor: (filamentColor) => set({ filamentColor }),
   setStock: (stock) => set({ stock }),
+  editStock: (stock) => set({ stock, stockUserEdited: true }),
   setGridRes: (gridRes) => set({ gridRes }),
   setTool: (tool) => set({ tool }),
   setOpIndex: (opIndex) => set({ opIndex }),
   setStockColor: (stockColor) => set({ stockColor }),
   bumpStockEdit: () => set((s) => ({ stockEditNonce: s.stockEditNonce + 1 })),
+  setShowStockEditor: (showStockEditor) => set({ showStockEditor }),
   setShowGrid: (showGrid) => set({ showGrid }),
   setShowAxes: (showAxes) => set({ showAxes }),
   setShowStats: (showStats) => set({ showStats }),
@@ -254,6 +268,7 @@ export const useStore = create<AppState>((set, get) => ({
       layerRange: [0, 0],
       opIndex: -1,
       stock: null,
+      stockUserEdited: false,
     }),
 
   activeModel: () => pickActive(get().models, get().selectedId),

@@ -20,7 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore, activeDoc } from '../store.ts';
-import { computeDefaultStock } from './Stock.ts';
+import { computeDefaultStock, DEFAULT_MIN } from './Stock.ts';
 import { wrap, proxy } from '../workers/comlink.ts';
 import type { Remote } from '../workers/comlink.ts';
 import type { HeightmapWorkerApi } from './heightmap.worker.ts';
@@ -152,6 +152,11 @@ const AXIS_DIR = [
   new THREE.Vector3(0, 0, 1),
 ];
 
+// Orientation for the arrow handles: built along local +Y, rotated so +Y maps
+// onto each drag axis. (Y→Y is identity.)
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const AXIS_QUAT = AXIS_DIR.map((d) => new THREE.Quaternion().setFromUnitVectors(Y_AXIS, d));
+
 /** Minimum stock extent (mm) along any axis — handles can't cross past this. */
 const MIN_EXTENT = 0.5;
 
@@ -189,7 +194,7 @@ function resizeStock(s: StockDef, axis: 0 | 1 | 2, side: 'min' | 'max', coord: n
  */
 function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
   const { camera, gl, raycaster, controls } = useThree();
-  const setStock = useStore((s) => s.setStock);
+  const editStock = useStore((s) => s.editStock);
   const bumpStockEdit = useStore((s) => s.bumpStockEdit);
 
   const drag = useRef<{ axis: 0 | 1 | 2; side: 'min' | 'max' } | null>(null);
@@ -204,10 +209,10 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
   // The box3 helper draws the wireframe outline.
   const box3 = useMemo(() => new THREE.Box3(min.clone(), max.clone()), [min, max]);
 
-  // Handle size scales with the stock so it stays grabbable but unobtrusive.
-  const handleSize = useMemo(() => {
+  // Arrow length scales with the stock so handles stay grabbable but unobtrusive.
+  const arrowSize = useMemo(() => {
     const maxDim = Math.max(size.x, size.y, size.z, 1);
-    return Math.min(Math.max(maxDim * 0.05, 1), 8);
+    return Math.min(Math.max(maxDim * 0.15, 4), 30);
   }, [size]);
 
   // World-space center of a given face (drag handle position).
@@ -252,7 +257,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       plane.setFromNormalAndCoplanarPoint(n, pt);
 
       if (!raycaster.ray.intersectPlane(plane, hit)) return;
-      setStock(resizeStock(s, d.axis, d.side, hit.getComponent(d.axis)));
+      editStock(resizeStock(s, d.axis, d.side, hit.getComponent(d.axis)));
     };
 
     const onUp = () => {
@@ -268,7 +273,7 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [camera, gl, raycaster, controls, setStock, bumpStockEdit]);
+  }, [camera, gl, raycaster, controls, editStock, bumpStockEdit]);
 
   const onGrab = (axis: 0 | 1 | 2, side: 'min' | 'max') => (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -279,15 +284,59 @@ function StockEditor({ stock, color }: { stock: StockDef; color: string }) {
   return (
     <group>
       <box3Helper args={[box3, new THREE.Color(color)]} />
-      {FACES.map(({ axis, side, color: hc }) => {
-        const p = faceCenter(axis, side);
-        return (
-          <mesh key={`${axis}-${side}`} position={p} onPointerDown={onGrab(axis, side)}>
-            <boxGeometry args={[handleSize, handleSize, handleSize]} />
-            <meshStandardMaterial color={hc} transparent opacity={0.85} depthTest={false} />
-          </mesh>
-        );
-      })}
+      {FACES.map(({ axis, side, color: hc }) => (
+        <FaceArrow
+          key={`${axis}-${side}`}
+          position={faceCenter(axis, side)}
+          axis={axis}
+          size={arrowSize}
+          color={hc}
+          onPointerDown={onGrab(axis, side)}
+        />
+      ))}
+    </group>
+  );
+}
+
+/**
+ * A double-ended arrow handle, centred on a stock face and pointing along that
+ * face's drag axis (so it reads as "slide this face in or out"). Built along
+ * local +Y from a thin shaft and two end cones, then rotated onto the axis. The
+ * tips sit exactly at ±size/2 from the face centre, aligned with the axis.
+ */
+function FaceArrow({
+  position,
+  axis,
+  size,
+  color,
+  onPointerDown,
+}: {
+  position: THREE.Vector3;
+  axis: 0 | 1 | 2;
+  size: number;
+  color: string;
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+}) {
+  const coneH = size * 0.3;
+  const coneR = size * 0.13;
+  const shaftR = size * 0.04;
+  const shaftLen = Math.max(size - 2 * coneH, size * 0.1);
+  const tip = shaftLen / 2 + coneH / 2; // centre offset of each cone
+
+  return (
+    <group position={position} quaternion={AXIS_QUAT[axis]} onPointerDown={onPointerDown}>
+      <mesh>
+        <cylinderGeometry args={[shaftR, shaftR, shaftLen, 12]} />
+        <meshStandardMaterial color={color} depthTest={false} />
+      </mesh>
+      <mesh position={[0, tip, 0]}>
+        <coneGeometry args={[coneR, coneH, 16]} />
+        <meshStandardMaterial color={color} depthTest={false} />
+      </mesh>
+      <mesh position={[0, -tip, 0]} rotation={[Math.PI, 0, 0]}>
+        <coneGeometry args={[coneR, coneH, 16]} />
+        <meshStandardMaterial color={color} depthTest={false} />
+      </mesh>
     </group>
   );
 }
@@ -302,6 +351,7 @@ export function SubtractiveModel() {
   const opIndex = useStore((s) => s.opIndex);
   const effectiveMode = useStore((s) => s.effectiveMode);
   const stockColor = useStore((s) => s.stockColor);
+  const showStockEditor = useStore((s) => s.showStockEditor);
   const setStock = useStore((s) => s.setStock);
   const setProgress = useStore((s) => s.setProgress);
   const setStatus = useStore((s) => s.setStatus);
@@ -309,11 +359,12 @@ export function SubtractiveModel() {
   const mode = effectiveMode();
   const active = !!doc && mode === 'subtractive';
 
-  // Resolve stock: derive a default from the toolpath bbox if none is set.
-  // This writes to the store as a side effect (in an effect, not during render).
+  // Resolve stock: default = the work file's extremities, floored to the
+  // 100×100×10 default block (DEFAULT_MIN). Written back to the store via an
+  // effect (not during render). A user-set stock persists (see store.addModel).
   const stock: StockDef | null = useMemo(() => {
     if (!active || !doc) return null;
-    return storeStock ?? computeDefaultStock(doc.bbox);
+    return storeStock ?? computeDefaultStock(doc.bbox, undefined, DEFAULT_MIN);
   }, [active, doc, storeStock]);
 
   useEffect(() => {
@@ -406,7 +457,7 @@ export function SubtractiveModel() {
           />
         </mesh>
       )}
-      {stock && <StockEditor stock={stock} color={stockColor} />}
+      {stock && showStockEditor && <StockEditor stock={stock} color={stockColor} />}
     </>
   );
 }

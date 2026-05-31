@@ -17,24 +17,53 @@ const DEFAULT_THICKNESS = 10;
 /** Default XY margin (mm) added around the toolpath bbox. */
 const DEFAULT_MARGIN = 2;
 
+/** Minimum per-axis stock extent. The default block is 100 × 100 × 10 mm: a
+ *  small part loads inside this block, a larger part grows the block to fit. */
+export interface StockMin {
+  x: number;
+  y: number;
+  z: number;
+}
+export const DEFAULT_MIN: StockMin = { x: 100, y: 100, z: 10 };
+
 /**
  * Compute a default stock block from the toolpath bounding box.
  *
- * - XY: bbox expanded by `margin` on every side.
+ * - XY: bbox expanded by `margin` on every side, then grown (symmetrically) to
+ *       at least `min.x` / `min.y`.
  * - Z : top = bbox.max.z (material surface), bottom = bbox.min.z (deepest cut).
- *       If that span is ~zero, the block is `DEFAULT_THICKNESS` thick measured
- *       DOWN from the top (the toolpath sits on the stock surface).
+ *       A ~zero span falls back to `DEFAULT_THICKNESS`; the block is then grown
+ *       DOWNWARD to at least `min.z` so the top stays at the material surface.
+ *
+ * With the default `min` of {0,0,0} this is a tight fit to the toolpath; the app
+ * passes `DEFAULT_MIN` so the block never starts smaller than 100 × 100 × 10.
  *
  * `origin` is the min corner (x, y, stockBottomZ) — matching `HeightFieldPayload`.
  */
-export function computeDefaultStock(bbox: Box3, margin = DEFAULT_MARGIN): StockDef {
+export function computeDefaultStock(
+  bbox: Box3,
+  margin = DEFAULT_MARGIN,
+  min: StockMin = { x: 0, y: 0, z: 0 },
+): StockDef {
   const [minX, minY, minZ] = bbox.min;
   const [maxX, maxY, maxZ] = bbox.max;
 
   const m = Math.max(0, margin);
 
-  const sizeX = Math.max(maxX - minX, 0) + 2 * m;
-  const sizeY = Math.max(maxY - minY, 0) + 2 * m;
+  let sizeX = Math.max(maxX - minX, 0) + 2 * m;
+  let sizeY = Math.max(maxY - minY, 0) + 2 * m;
+  let originX = minX - m;
+  let originY = minY - m;
+
+  // Grow XY symmetrically to the minimum so the part stays centred in the block.
+  if (sizeX < min.x) {
+    originX -= (min.x - sizeX) / 2;
+    sizeX = min.x;
+  }
+  if (sizeY < min.y) {
+    originY -= (min.y - sizeY) / 2;
+    sizeY = min.y;
+  }
 
   const topZ = maxZ;
   let bottomZ = minZ;
@@ -42,10 +71,14 @@ export function computeDefaultStock(bbox: Box3, margin = DEFAULT_MARGIN): StockD
   if (!(topZ - bottomZ > 1e-6)) {
     bottomZ = topZ - DEFAULT_THICKNESS;
   }
+  // Grow downward to the minimum thickness (keep the top at the surface).
+  if (topZ - bottomZ < min.z) {
+    bottomZ = topZ - min.z;
+  }
   const sizeZ = topZ - bottomZ;
 
   return {
-    origin: [minX - m, minY - m, bottomZ],
+    origin: [originX, originY, bottomZ],
     sizeX,
     sizeY,
     sizeZ,

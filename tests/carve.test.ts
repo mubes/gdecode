@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { carveHeightField } from '../src/subtractive/carve.ts';
-import { computeDefaultStock } from '../src/subtractive/Stock.ts';
+import { computeDefaultStock, DEFAULT_MIN } from '../src/subtractive/Stock.ts';
 import { toolProfile } from '../src/subtractive/tools.ts';
 import type { Move, StockDef, ToolDef } from '../src/types.ts';
 
@@ -45,6 +45,26 @@ describe('computeDefaultStock', () => {
     const s = computeDefaultStock({ min: [0, 0, 0], max: [10, 10, 0] }, 0);
     expect(s.sizeZ).toBe(10);
     expect(s.origin[2]).toBe(-10);
+  });
+
+  it('floors a small part to the 100×100×10 default block, centred', () => {
+    // 20×20 part at Z 0..2 → grows to the 100×100×10 minimum.
+    const s = computeDefaultStock({ min: [0, 0, 0], max: [20, 20, 2] }, 0, DEFAULT_MIN);
+    expect(s.sizeX).toBe(100);
+    expect(s.sizeY).toBe(100);
+    expect(s.sizeZ).toBe(10);
+    // Part (centre 10,10) stays centred in the block.
+    expect(s.origin[0]).toBe(-40);
+    expect(s.origin[1]).toBe(-40);
+    // Top stays at the material surface (max Z); block grows downward.
+    expect(s.origin[2] + s.sizeZ).toBeCloseTo(2, 6);
+  });
+
+  it('grows past the minimum to fit a larger part', () => {
+    const s = computeDefaultStock({ min: [0, 0, -30], max: [200, 50, 0] }, 2, DEFAULT_MIN);
+    expect(s.sizeX).toBe(204); // 200 + 2*margin, already > 100
+    expect(s.sizeY).toBe(100); // 54 < 100 → floored
+    expect(s.sizeZ).toBe(30); // 30 > 10 → kept
   });
 });
 
